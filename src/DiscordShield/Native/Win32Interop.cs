@@ -9,6 +9,7 @@ public static class Win32Interop
     public const uint WDA_MONITOR = 0x00000001;
     public const uint WDA_EXCLUDEFROMCAPTURE = 0x00000011;
 
+    public const int SW_SHOW = 5;
     public const int SW_MINIMIZE = 6;
     public const int SW_RESTORE = 9;
 
@@ -242,6 +243,10 @@ public static class Win32Interop
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
 
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

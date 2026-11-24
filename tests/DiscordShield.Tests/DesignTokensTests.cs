@@ -139,4 +139,42 @@ public sealed class DesignTokensTests
         // Only the tiny GuardEvaluation record itself (<= 128 bytes; previously > 1,200 bytes with HashSets + LINQ!)
         Assert.True(allocated <= 128, $"Idle sweep allocated {allocated} bytes (expected <= 128 bytes).");
     }
+
+    [Fact]
+    public void MainForm_InstantShowFromTray_RestoresVisibilityAndPreservesCaptureAffinity()
+    {
+        Exception? ex = null;
+        var sta = new Thread(() =>
+        {
+            try
+            {
+                var capture = new CaptureExclusionService();
+                using var form = new MainForm(
+                    new AppSettings { ExcludeWrapperFromCapture = true },
+                    capture,
+                    new Win32WindowInspector(),
+                    new UpworkAutomationHelper(),
+                    taskbarShield: new TaskbarShieldService(() => false, _ => true),
+                    initialPalette: DesignTokens.Dark,
+                    autoRefreshOnShow: false);
+
+                form.Show();
+                form.Hide();
+                Assert.False(form.Visible);
+
+                form.InstantShowFromTray();
+                Assert.True(form.Visible);
+
+                AffinityResult affinity = capture.ReadAffinity(form.Handle);
+                Assert.True(affinity.Success);
+                Assert.Equal(DiscordShield.Native.Win32Interop.WDA_EXCLUDEFROMCAPTURE, affinity.ActualAffinity);
+                form.Hide();
+            }
+            catch (Exception e) { ex = e; }
+        });
+        sta.SetApartmentState(ApartmentState.STA);
+        sta.Start();
+        sta.Join(TimeSpan.FromSeconds(10));
+        Assert.Null(ex);
+    }
 }

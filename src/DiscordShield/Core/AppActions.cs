@@ -64,7 +64,7 @@ public static class ActionRegistry
         AppAction.SaveSettings => new(action, "Settings Tab", "Change any setting", "—", "Apply settings immediately and persist asynchronously"),
         AppAction.CopyActivityLog => new(action, "Settings Tab", "Click Copy Log", "—", "Copy full timestamped activity log to clipboard"),
         AppAction.ClearActivityLog => new(action, "Settings Tab", "Click Clear Log", "—", "Clear visible activity log entries"),
-        AppAction.ToggleWindowVisibility => new(action, "Tray", "Double-click Tray icon", "Ctrl+Shift+H", "Show/focus or hide ScreenShield window"),
+        AppAction.ToggleWindowVisibility => new(action, "Tray", "Single left-click Tray icon", "Ctrl+Shift+H", "Instantly pop ScreenShield to front (or hide if already focused)"),
         AppAction.MinimizeToTrayOnClose => new(action, "Window Event", "Click Close (X) with Tray enabled", "Alt+F4", "Hide to system tray while continuing protection"),
         AppAction.ExitApplication => new(action, "Tray / Window", "Tray Exit", "—", "Restore taskbar state, unregister hotkey, dispose GDI icons, exit"),
         AppAction.GlobalHotkeyToggle => new(action, "Win32 WM_HOTKEY", "Press global shortcut from any app", "Ctrl+Shift+H", "Instantly show or hide ScreenShield"),

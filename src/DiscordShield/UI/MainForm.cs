@@ -37,6 +37,7 @@ public sealed class MainForm : Form
     private bool _forceExit;
     private bool _hotkeyRegistered;
     private bool _isDraggingOrResizing;
+    private bool _shownTrayHint;
     private int _guardInFlight;
     private int _refreshInFlight;
     private bool _suppressSettingsEvents;
@@ -626,11 +627,27 @@ public sealed class MainForm : Form
         _trayIcon = new NotifyIcon
         {
             Icon = _shieldIcon,
-            Text = "ScreenShield — Active",
+            Text = "ScreenShield — Click to open",
             Visible = true,
             ContextMenuStrip = BuildTrayMenu()
         };
-        _trayIcon.DoubleClick += (_, _) => ToggleWindowVisibility();
+        // Single left-click pops ScreenShield up immediately (0 ms double-click wait);
+        // right-click opens the context menu.
+        _trayIcon.MouseClick += (_, e) =>
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                if (Visible && WindowState != FormWindowState.Minimized && Win32Interop.GetForegroundWindow() == Handle)
+                {
+                    _helpPopover.HidePopover();
+                    Hide();
+                }
+                else
+                {
+                    InstantShowFromTray();
+                }
+            }
+        };
 
         // Event-driven SetWinEventHook handles instant (<5ms) foreground/restore reactions;
         // 8s timer is a lightweight fallback for silent Upwork start/stop or browser title changes.
@@ -1011,10 +1028,6 @@ public sealed class MainForm : Form
             {
                 FitListColumns();
             }
-            else if (WindowState == FormWindowState.Minimized)
-            {
-                Win32Interop.TrimWorkingSetMemory();
-            }
         }
     }
 
@@ -1123,12 +1136,16 @@ public sealed class MainForm : Form
             e.Cancel = true;
             _helpPopover.HidePopover();
             Hide();
-            Win32Interop.TrimWorkingSetMemory();
-            _trayIcon.ShowBalloonTip(
-                2000,
-                "ScreenShield is running in the tray",
-                "Press Ctrl+Shift+H or double-click the tray icon to reopen.",
-                ToolTipIcon.Info);
+            if (!_shownTrayHint)
+            {
+                _shownTrayHint = true;
+                _trayIcon.ShowBalloonTip(
+                    1800,
+                    "ScreenShield is running in the tray",
+                    "Left-click the tray icon or press Ctrl+Shift+H to open instantly.",
+                    ToolTipIcon.Info);
+            }
+
             return;
         }
 
@@ -1388,18 +1405,43 @@ public sealed class MainForm : Form
         ScheduleDebouncedSave();
     }
 
+    /// <summary>
+    /// Lowest-latency path to bring ScreenShield to the front from the system tray:
+    /// avoids redundant affinity re-apply (handle affinity persists across Hide/Show)
+    /// and uses direct Win32 ShowWindow + SetForegroundWindow with hot RAM pages.
+    /// </summary>
+    public void InstantShowFromTray()
+    {
+        if (!Visible)
+        {
+            Show();
+        }
+
+        if (IsHandleCreated)
+        {
+            if (Win32Interop.IsIconic(Handle))
+            {
+                _ = Win32Interop.ShowWindow(Handle, Win32Interop.SW_RESTORE);
+            }
+            else
+            {
+                _ = Win32Interop.ShowWindow(Handle, Win32Interop.SW_SHOW);
+            }
+
+            _ = Win32Interop.SetForegroundWindow(Handle);
+        }
+    }
+
     public void ToggleWindowVisibility()
     {
         if (Visible && WindowState != FormWindowState.Minimized)
         {
+            _helpPopover.HidePopover();
             Hide();
         }
         else
         {
-            Show();
-            WindowState = FormWindowState.Normal;
-            Activate();
-            ApplyCaptureExclusionState();
+            InstantShowFromTray();
         }
     }
 
