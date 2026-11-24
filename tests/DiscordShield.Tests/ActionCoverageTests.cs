@@ -109,7 +109,7 @@ public sealed class ActionCoverageTests
 
             results[AppAction.AffinityWatchdogCheck] = Benchmark(AppAction.AffinityWatchdogCheck, 100, () => _ = capture.ReadAffinity(form.Handle), "Real Win32 GetWindowDisplayAffinity readback");
 
-            // SaveSettings
+            // SaveSettings, CopyActivityLog, ClearActivityLog
             string tempPath = Path.Combine(Path.GetTempPath(), $"ss-bench-{Guid.NewGuid():N}.json");
             try
             {
@@ -119,6 +119,9 @@ public sealed class ActionCoverageTests
             {
                 if (File.Exists(tempPath)) File.Delete(tempPath);
             }
+
+            results[AppAction.CopyActivityLog] = Benchmark(AppAction.CopyActivityLog, 20, () => form.CopyActivityLog(), "Copy full timestamped activity log to clipboard");
+            results[AppAction.ClearActivityLog] = Benchmark(AppAction.ClearActivityLog, 50, () => form.ClearActivityLog(), "Clear visible activity log entries");
 
             // Visibility, Hotkey, Tray, Exit
             results[AppAction.ToggleWindowVisibility] = Benchmark(AppAction.ToggleWindowVisibility, 20, () => form.ToggleWindowVisibility(), "Show/Hide ScreenShield + re-assert affinity");

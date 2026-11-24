@@ -1,3 +1,5 @@
+using System.Drawing.Drawing2D;
+using System.IO;
 using DiscordShield.Core;
 using DiscordShield.Native;
 using Microsoft.Win32;
@@ -21,6 +23,7 @@ public sealed class MainForm : Form
     private readonly IWindowInspector _windowInspector;
     private readonly IUpworkAutomationHelper _upworkAutomation;
     private readonly ITaskbarShieldService _taskbarShield;
+    private readonly IUpworkScreenshotWatcher _screenshotWatcher;
     private readonly WindowGuardEngine _guardEngine;
 
     private AppSettings _settings;
@@ -28,6 +31,8 @@ public sealed class MainForm : Form
     private ShieldFilterTab _activeTab = ShieldFilterTab.All;
     private IReadOnlyList<CatalogEntry> _allCatalogEntries = [];
     private IReadOnlyList<CatalogEntry> _visibleEntries = [];
+    private bool _lastUpworkRunning;
+    private int _lastExposedCount;
 
     private bool _forceExit;
     private bool _hotkeyRegistered;
@@ -40,10 +45,13 @@ public sealed class MainForm : Form
 
     // Header & Tabs
     private readonly TableLayoutPanel _headerBar;
+    private readonly Panel _brandLogo;
+    private readonly Label _lblBrandName;
     private readonly MinimalButton _btnShieldPill;
     private readonly Label _lblGuardStatus;
     private readonly MinimalButton _btnRefresh;
     private readonly MinimalButton _btnVerify;
+    private ToolStripMenuItem? _trayLastSsItem;
 
     private readonly FlowLayoutPanel _tabBar;
     private readonly MinimalButton _tabAll;
@@ -75,7 +83,11 @@ public sealed class MainForm : Form
     private readonly CheckBox _chkMinimizeToTray;
     private readonly CheckBox _chkGlobalHotkey;
     private readonly TextBox _txtLog;
+    private readonly MinimalButton _btnCopyLog;
+    private readonly MinimalButton _btnClearLog;
     private readonly List<Label> _settingsSubLabels = [];
+    private readonly List<Label> _settingsSectionHeaders = [];
+    private readonly List<HelpBadge> _helpBadges = [];
 
     private readonly ToolTip _toolTip;
     private readonly Panel _sentinelOverlay;
@@ -87,8 +99,11 @@ public sealed class MainForm : Form
     [
         _btnShieldPill, _btnRefresh, _btnVerify,
         _tabAll, _tabAllowed, _tabBlocked, _tabSettings,
-        _btnAddSite, _btnBulkBlock, _btnBulkAllow
+        _btnAddSite, _btnBulkBlock, _btnBulkAllow,
+        _btnCopyLog, _btnClearLog
     ];
+
+    public IReadOnlyList<HelpBadge> HelpBadges => _helpBadges;
 
     public ThemePalette CurrentPalette => _palette;
     public ShieldFilterTab ActiveTab => _activeTab;
@@ -101,13 +116,15 @@ public sealed class MainForm : Form
         IUpworkAutomationHelper upworkAutomation,
         ITaskbarShieldService? taskbarShield = null,
         ThemePalette? initialPalette = null,
-        bool autoRefreshOnShow = true)
+        bool autoRefreshOnShow = true,
+        IUpworkScreenshotWatcher? screenshotWatcher = null)
     {
         _settings = settings;
         _captureService = captureService;
         _windowInspector = windowInspector;
         _upworkAutomation = upworkAutomation;
         _taskbarShield = taskbarShield ?? new TaskbarShieldService();
+        _screenshotWatcher = screenshotWatcher ?? new UpworkScreenshotWatcher();
         _guardEngine = new WindowGuardEngine();
         _palette = initialPalette ?? DesignTokens.SystemDefault();
         _autoRefreshOnShow = autoRefreshOnShow;
@@ -116,31 +133,67 @@ public sealed class MainForm : Form
         Size = new Size(1020, 680);
         MinimumSize = new Size(760, 520);
         StartPosition = FormStartPosition.CenterScreen;
+        ShowInTaskbar = true;
         Font = DesignTokens.CreateUiFont(9.5f);
         KeyPreview = true;
         DoubleBuffered = true;
 
-        _shieldIcon = CreateShieldIcon(active: true);
+        _shieldIcon = LoadOrCreateShieldIcon();
         Icon = _shieldIcon;
-        _toolTip = new ToolTip { InitialDelay = 250, ReshowDelay = 100 };
+        _toolTip = new ToolTip
+        {
+            InitialDelay = 120,
+            ReshowDelay = 80,
+            AutoPopDelay = 10000,
+            ShowAlways = true
+        };
 
-        // 1. Header bar
+        // 1. Clean Apple/Fluent-inspired Header Bar
         _headerBar = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            MinimumSize = new Size(0, 44),
-            ColumnCount = 3,
+            MinimumSize = new Size(0, 48),
+            ColumnCount = 4,
             RowCount = 1,
-            Padding = new Padding(16, 8, 16, 4)
+            Padding = new Padding(16, 10, 16, 6)
         };
+        _headerBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _headerBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _headerBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
         _headerBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _headerBar.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        _btnShieldPill = new MinimalButton("● Shield Active", ButtonTone.ShieldOn, pill: true);
+        var brandPanel = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            BackColor = Color.Transparent,
+            Margin = new Padding(0, 0, 14, 0)
+        };
+        _brandLogo = new Panel
+        {
+            Size = new Size(24, 24),
+            Margin = new Padding(0, 2, 7, 0),
+            BackColor = Color.Transparent
+        };
+        _brandLogo.Paint += OnPaintBrandLogo;
+
+        _lblBrandName = new Label
+        {
+            Text = "ScreenShield",
+            AutoSize = true,
+            Font = DesignTokens.CreateUiFont(10.5f, semibold: true),
+            Padding = new Padding(0, 3, 0, 0),
+            Margin = new Padding(0)
+        };
+        brandPanel.Controls.Add(_brandLogo);
+        brandPanel.Controls.Add(_lblBrandName);
+
+        _btnShieldPill = new MinimalButton("● Protected", ButtonTone.ShieldOn, pill: true);
         _btnShieldPill.Click += (_, _) => ToggleCaptureExclusion();
         _toolTip.SetToolTip(_btnShieldPill, "Toggle screenshot exclusion on ScreenShield (Ctrl+Shift+S)");
 
@@ -150,8 +203,8 @@ public sealed class MainForm : Form
             AutoEllipsis = true,
             TextAlign = ContentAlignment.MiddleLeft,
             Padding = new Padding(12, 0, 8, 0),
-            Font = DesignTokens.CreateUiFont(9f),
-            Text = "Upwork off · Taskbar normal"
+            Font = DesignTokens.CreateUiFont(8.75f),
+            Text = "Upwork off · Last SS: none yet"
         };
 
         var headerRight = new FlowLayoutPanel
@@ -164,22 +217,23 @@ public sealed class MainForm : Form
             Margin = new Padding(0)
         };
 
-        _btnRefresh = new MinimalButton("Refresh", ButtonTone.Quiet);
+        _btnRefresh = new MinimalButton("↻ Refresh", ButtonTone.Quiet);
         _btnRefresh.Click += (_, _) => RefreshCatalogAsync();
         _toolTip.SetToolTip(_btnRefresh, "Scan active desktop apps & browser tabs (F5)");
 
-        _btnVerify = new MinimalButton("Verify", ButtonTone.Quiet);
+        _btnVerify = new MinimalButton("✓ Verify", ButtonTone.Quiet);
         _btnVerify.Click += async (_, _) => await RunLiveCaptureVerificationAsync();
         _toolTip.SetToolTip(_btnVerify, "Run live Windows screenshot test (Ctrl+Shift+V)");
 
         headerRight.Controls.Add(_btnRefresh);
         headerRight.Controls.Add(_btnVerify);
 
-        _headerBar.Controls.Add(_btnShieldPill, 0, 0);
-        _headerBar.Controls.Add(_lblGuardStatus, 1, 0);
-        _headerBar.Controls.Add(headerRight, 2, 0);
+        _headerBar.Controls.Add(brandPanel, 0, 0);
+        _headerBar.Controls.Add(_btnShieldPill, 1, 0);
+        _headerBar.Controls.Add(_lblGuardStatus, 2, 0);
+        _headerBar.Controls.Add(headerRight, 3, 0);
 
-        // 2. 4-Tab Navigation Bar: All Apps & Sites | Allowed | Blocked | Settings
+        // 2. 4-Tab Navigation Bar with crisp icons
         _tabBar = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
@@ -187,19 +241,19 @@ public sealed class MainForm : Form
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
-            Padding = new Padding(14, 4, 14, 8)
+            Padding = new Padding(14, 2, 14, 8)
         };
 
-        _tabAll = new MinimalButton("All Apps & Sites", ButtonTone.Quiet) { Selected = true };
+        _tabAll = new MinimalButton("⊞ All Apps & Sites", ButtonTone.Quiet) { Selected = true };
         _tabAll.Click += (_, _) => SelectTab(ShieldFilterTab.All);
 
-        _tabAllowed = new MinimalButton("Allowed", ButtonTone.Quiet);
+        _tabAllowed = new MinimalButton("✓ Allowed", ButtonTone.Quiet);
         _tabAllowed.Click += (_, _) => SelectTab(ShieldFilterTab.Allowed);
 
-        _tabBlocked = new MinimalButton("Blocked", ButtonTone.Quiet);
+        _tabBlocked = new MinimalButton("⊘ Blocked", ButtonTone.Quiet);
         _tabBlocked.Click += (_, _) => SelectTab(ShieldFilterTab.Blocked);
 
-        _tabSettings = new MinimalButton("Settings", ButtonTone.Quiet);
+        _tabSettings = new MinimalButton("⚙ Settings", ButtonTone.Quiet);
         _tabSettings.Click += (_, _) => SelectTab(ShieldFilterTab.Settings);
 
         _tabBar.Controls.Add(_tabAll);
@@ -297,10 +351,10 @@ public sealed class MainForm : Form
         addSitePanel.Controls.Add(_txtAddSite, 0, 1);
         addSitePanel.Controls.Add(_btnAddSite, 1, 1);
 
-        _btnBulkBlock = new MinimalButton("Block Selected", ButtonTone.Accent) { Anchor = AnchorStyles.Bottom };
+        _btnBulkBlock = new MinimalButton("⊘ Block Selected", ButtonTone.Accent) { Anchor = AnchorStyles.Bottom };
         _btnBulkBlock.Click += (_, _) => BulkUpdateSelected(block: true);
 
-        _btnBulkAllow = new MinimalButton("Allow Selected", ButtonTone.Quiet) { Anchor = AnchorStyles.Bottom };
+        _btnBulkAllow = new MinimalButton("✓ Allow Selected", ButtonTone.Quiet) { Anchor = AnchorStyles.Bottom };
         _btnBulkAllow.Click += (_, _) => BulkUpdateSelected(block: false);
 
         actionBar.Controls.Add(searchBoxWrap, 0, 0);
@@ -354,11 +408,11 @@ public sealed class MainForm : Form
         _catalogPage.Controls.Add(_lblEmptyHint);
         _catalogPage.Controls.Add(actionBar);
 
-        // 4. Inline Settings Page (compact 2-column checkbox grid — zero clipping at 980x620)
+        // 4. Inline Settings Page (3 organized sections + (?) plain-English help + full Activity Log)
         _settingsPage = new Panel
         {
             Dock = DockStyle.Fill,
-            Padding = new Padding(20, 12, 20, 12),
+            Padding = new Padding(20, 10, 20, 12),
             AutoScroll = false,
             Visible = false
         };
@@ -367,43 +421,47 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 5,
+            RowCount = 7,
             BackColor = Color.Transparent
         };
         settingsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        settingsLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        settingsLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        settingsLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        settingsLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        settingsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        settingsLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // Section 1 header
+        settingsLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // Protection toggles
+        settingsLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // Section 2 header
+        settingsLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // Behavior fields + tray/hotkey
+        settingsLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // Tray + hotkey toggles
+        settingsLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // Section 3 header + Copy/Clear
+        settingsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f)); // Full Activity Log
 
-        var toggleGrid = new TableLayoutPanel
+        // Section 1: Protection
+        settingsLayout.Controls.Add(CreateSectionHeader("Protection"), 0, 0);
+
+        var protectionGrid = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 2,
-            RowCount = 3,
+            RowCount = 2,
             BackColor = Color.Transparent,
             Margin = new Padding(0, 0, 0, 8)
         };
-        toggleGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
-        toggleGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+        protectionGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+        protectionGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
 
         _chkExcludeSelf = CreateSettingsCheckBox("Hide ScreenShield from screenshots", _settings.ExcludeWrapperFromCapture);
-        _chkTaskbarHide = CreateSettingsCheckBox("Auto-hide Windows taskbar when blocked open", _settings.AlwaysHideTaskbarWhenBlockedOpen);
-        _chkGuardEnabled = CreateSettingsCheckBox("Enable live protection for blocked apps/sites", _settings.NativeGuardEnabled);
-        _chkOnlyWhenUpwork = CreateSettingsCheckBox("Only activate while Upwork is running", _settings.OnlyActWhenUpworkRunning);
-        _chkMinimizeToTray = CreateSettingsCheckBox("Keep running in system tray when closed", _settings.MinimizeToTrayOnClose);
-        _chkGlobalHotkey = CreateSettingsCheckBox("Quick show/hide shortcut (Ctrl + Shift + H)", _settings.EnableGlobalHotkey);
+        _chkTaskbarHide = CreateSettingsCheckBox("Auto-hide Windows taskbar", _settings.AlwaysHideTaskbarWhenBlockedOpen);
+        _chkGuardEnabled = CreateSettingsCheckBox("Watch for blocked apps & sites", _settings.NativeGuardEnabled);
+        _chkOnlyWhenUpwork = CreateSettingsCheckBox("Only protect while Upwork is running", _settings.OnlyActWhenUpworkRunning);
 
-        toggleGrid.Controls.Add(_chkExcludeSelf, 0, 0);
-        toggleGrid.Controls.Add(_chkTaskbarHide, 1, 0);
-        toggleGrid.Controls.Add(_chkGuardEnabled, 0, 1);
-        toggleGrid.Controls.Add(_chkOnlyWhenUpwork, 1, 1);
-        toggleGrid.Controls.Add(_chkMinimizeToTray, 0, 2);
-        toggleGrid.Controls.Add(_chkGlobalHotkey, 1, 2);
-        settingsLayout.Controls.Add(toggleGrid, 0, 0);
+        protectionGrid.Controls.Add(WrapWithHelp(_chkExcludeSelf, "Makes the ScreenShield window itself invisible to Upwork and Windows screenshots while staying visible to you."), 0, 0);
+        protectionGrid.Controls.Add(WrapWithHelp(_chkTaskbarHide, "Slides your bottom Windows taskbar out of sight while a blocked app or site is open so Upwork screenshots can't see its icon. Restores automatically when closed."), 1, 0);
+        protectionGrid.Controls.Add(WrapWithHelp(_chkGuardEnabled, "Runs quietly in the background and reacts whenever any app or website on your Blocked list is open."), 0, 1);
+        protectionGrid.Controls.Add(WrapWithHelp(_chkOnlyWhenUpwork, "Stays completely quiet when Upwork isn't open, so your apps and taskbar behave normally outside work hours."), 1, 1);
+        settingsLayout.Controls.Add(protectionGrid, 0, 1);
+
+        // Section 2: Behavior & Shortcuts
+        settingsLayout.Controls.Add(CreateSectionHeader("Behavior & Shortcuts"), 0, 2);
 
         var fieldsGrid = new TableLayoutPanel
         {
@@ -413,15 +471,15 @@ public sealed class MainForm : Form
             ColumnCount = 3,
             RowCount = 2,
             BackColor = Color.Transparent,
-            Margin = new Padding(0, 4, 0, 8)
+            Margin = new Padding(0, 0, 0, 4)
         };
-        fieldsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+        fieldsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 46f));
         fieldsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 32f));
-        fieldsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 18f));
+        fieldsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 22f));
 
-        var lblAction = CreateSettingsSubLabel("Action when a blocked app or site is open:");
-        var lblUpwork = CreateSettingsSubLabel("Time tracker process:");
-        var lblCooldown = CreateSettingsSubLabel("Cooldown (sec):");
+        var lblAction = CreateLabelWithHelp("When a blocked app or site is open", "Choose what ScreenShield does if a blocked app or website is open while Upwork is running.");
+        var lblUpwork = CreateLabelWithHelp("Time tracker app", "Process name of your time tracker (default: Upwork). Add multiple separated by commas.");
+        var lblCooldown = CreateLabelWithHelp("Cooldown (sec)", "Seconds to wait before alerting again for the same window so you aren't spammed.");
 
         _cmbAction = new ComboBox
         {
@@ -469,9 +527,53 @@ public sealed class MainForm : Form
         fieldsGrid.Controls.Add(_cmbAction, 0, 1);
         fieldsGrid.Controls.Add(_txtUpworkProcs, 1, 1);
         fieldsGrid.Controls.Add(_numCooldown, 2, 1);
-        settingsLayout.Controls.Add(fieldsGrid, 0, 1);
+        settingsLayout.Controls.Add(fieldsGrid, 0, 3);
 
-        settingsLayout.Controls.Add(CreateSettingsSubLabel("Activity log:"), 0, 2);
+        var shortcutGrid = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 2,
+            RowCount = 1,
+            BackColor = Color.Transparent,
+            Margin = new Padding(0, 2, 0, 8)
+        };
+        shortcutGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+        shortcutGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+
+        _chkMinimizeToTray = CreateSettingsCheckBox("Keep running in system tray when closed", _settings.MinimizeToTrayOnClose);
+        _chkGlobalHotkey = CreateSettingsCheckBox("Quick show/hide shortcut (Ctrl + Shift + H)", _settings.EnableGlobalHotkey);
+
+        shortcutGrid.Controls.Add(WrapWithHelp(_chkMinimizeToTray, "Clicking X hides ScreenShield into the tray by your clock instead of turning off protection."), 0, 0);
+        shortcutGrid.Controls.Add(WrapWithHelp(_chkGlobalHotkey, "Press Ctrl + Shift + H from anywhere on your PC to instantly show or hide ScreenShield."), 1, 0);
+        settingsLayout.Controls.Add(shortcutGrid, 0, 4);
+
+        // Section 3: Full Activity Log
+        var logHeaderRow = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 3,
+            RowCount = 1,
+            BackColor = Color.Transparent,
+            Margin = new Padding(0, 2, 0, 4)
+        };
+        logHeaderRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        logHeaderRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        logHeaderRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        _btnCopyLog = new MinimalButton("⧉ Copy Log", ButtonTone.Quiet);
+        _btnCopyLog.Click += (_, _) => CopyActivityLog();
+
+        _btnClearLog = new MinimalButton("✕ Clear", ButtonTone.Quiet);
+        _btnClearLog.Click += (_, _) => ClearActivityLog();
+
+        logHeaderRow.Controls.Add(CreateSectionHeader("Activity Log"), 0, 0);
+        logHeaderRow.Controls.Add(_btnCopyLog, 1, 0);
+        logHeaderRow.Controls.Add(_btnClearLog, 2, 0);
+        settingsLayout.Controls.Add(logHeaderRow, 0, 5);
 
         _txtLog = new TextBox
         {
@@ -481,10 +583,12 @@ public sealed class MainForm : Form
             ScrollBars = ScrollBars.Vertical,
             Font = new Font("Consolas", 8.75f),
             BorderStyle = BorderStyle.FixedSingle,
-            Margin = new Padding(0, 4, 0, 0)
+            Margin = new Padding(0, 2, 0, 0)
         };
-        settingsLayout.Controls.Add(_txtLog, 0, 4);
+        settingsLayout.Controls.Add(_txtLog, 0, 6);
         _settingsPage.Controls.Add(settingsLayout);
+
+        AppendLog("ScreenShield started · Shield active · Taskbar guard ready.");
 
         _sentinelOverlay = new Panel
         {
@@ -516,8 +620,23 @@ public sealed class MainForm : Form
         _affinityWatchdog = new System.Windows.Forms.Timer { Interval = 3000 };
         _affinityWatchdog.Tick += (_, _) => EnforceAffinityWatchdog();
 
+        _screenshotWatcher.ScreenshotDetected += OnUpworkScreenshotDetected;
         SystemEvents.UserPreferenceChanged += OnSystemPreferenceChanged;
         ApplyTheme(_palette);
+    }
+
+    private void OnUpworkScreenshotDetected(UpworkScreenshotEvent evt)
+    {
+        string tbState = _taskbarShield.IsTaskbarCurrentlyShielded ? "Taskbar hidden" : "Taskbar normal";
+        string shieldState = _settings.ExcludeWrapperFromCapture ? "Shield ACTIVE" : "Shield PAUSED";
+        string msg = $"[Upwork SS #{evt.SessionCount}] Screenshot detected at {evt.DetectedAt.LocalDateTime:HH:mm:ss} ({evt.FileName}) · {shieldState} · {tbState}";
+
+        if (IsDisposed || !IsHandleCreated) return;
+        BeginInvoke(() =>
+        {
+            AppendLog(msg);
+            RefreshStatusLine();
+        });
     }
 
     public void LoadCatalogSnapshot(IReadOnlyList<WindowSnapshot> windows, bool includeBrowserUia = false)
@@ -676,9 +795,9 @@ public sealed class MainForm : Form
         int blocked = _allCatalogEntries.Count(static e => e.IsBlocked);
         int allowed = total - blocked;
 
-        _tabAll.Text = $"All Apps & Sites ({total})";
-        _tabAllowed.Text = $"Allowed ({allowed})";
-        _tabBlocked.Text = $"Blocked ({blocked})";
+        _tabAll.Text = $"⊞ All Apps & Sites ({total})";
+        _tabAllowed.Text = $"✓ Allowed ({allowed})";
+        _tabBlocked.Text = $"⊘ Blocked ({blocked})";
     }
 
     private void RenderFilteredCatalog()
@@ -696,8 +815,8 @@ public sealed class MainForm : Form
                     Tag = entry,
                     UseItemStyleForSubItems = false
                 };
-                row.SubItems.Add(entry.Kind == ShieldItemKind.App ? "App" : "Site");
-                var statusSub = row.SubItems.Add(entry.IsBlocked ? "● Blocked" : "Allowed");
+                row.SubItems.Add(entry.Kind == ShieldItemKind.App ? "▢ App" : "◎ Site");
+                var statusSub = row.SubItems.Add(entry.IsBlocked ? "● Blocked" : "✓ Allowed");
                 statusSub.ForeColor = entry.IsBlocked ? _palette.DangerText : _palette.ShieldActiveText;
                 var detailSub = row.SubItems.Add(entry.Detail);
                 detailSub.ForeColor = _palette.TextSub;
@@ -725,7 +844,9 @@ public sealed class MainForm : Form
 
         _headerBar.BackColor = palette.BaseSurface;
         _tabBar.BackColor = palette.BaseSurface;
+        _lblBrandName.ForeColor = palette.TextPrimary;
         _lblGuardStatus.ForeColor = palette.TextSub;
+        _brandLogo.Invalidate();
 
         _catalogPage.BackColor = palette.ContentSurface;
         _settingsPage.BackColor = palette.ContentSurface;
@@ -749,6 +870,8 @@ public sealed class MainForm : Form
         _chkMinimizeToTray.ForeColor = palette.TextPrimary;
         _chkGlobalHotkey.ForeColor = palette.TextPrimary;
         foreach (Label lbl in _settingsSubLabels) lbl.ForeColor = palette.TextSub;
+        foreach (Label hdr in _settingsSectionHeaders) hdr.ForeColor = palette.TextPrimary;
+        foreach (HelpBadge badge in _helpBadges) badge.ApplyTheme(palette);
 
         _cmbAction.BackColor = palette.InputSurface;
         _cmbAction.ForeColor = palette.TextPrimary;
@@ -757,13 +880,13 @@ public sealed class MainForm : Form
         _numCooldown.BackColor = palette.InputSurface;
         _numCooldown.ForeColor = palette.TextPrimary;
         _txtLog.BackColor = palette.BaseSurface;
-        _txtLog.ForeColor = palette.TextSub;
+        _txtLog.ForeColor = palette.TextPrimary;
 
         foreach (Control ctrl in InteractiveControls)
         {
             if (ctrl is MinimalButton btn)
             {
-                btn.SurfaceOverride = btn == _btnAddSite || btn == _btnBulkBlock || btn == _btnBulkAllow
+                btn.SurfaceOverride = btn == _btnAddSite || btn == _btnBulkBlock || btn == _btnBulkAllow || btn == _btnCopyLog || btn == _btnClearLog
                     ? palette.ContentSurface
                     : palette.BaseSurface;
                 btn.ApplyTheme(palette);
@@ -791,7 +914,10 @@ public sealed class MainForm : Form
     private ContextMenuStrip BuildTrayMenu()
     {
         var menu = new ContextMenuStrip();
-        menu.Items.Add("Show / Hide ScreenShield (Ctrl+Shift+H)", null, (_, _) => ToggleWindowVisibility());
+        menu.Items.Add("Open ScreenShield (Ctrl+Shift+H)", null, (_, _) => ToggleWindowVisibility());
+        _trayLastSsItem = new ToolStripMenuItem(_screenshotWatcher.FormatLastScreenshot(DateTimeOffset.UtcNow)) { Enabled = false };
+        menu.Items.Add(_trayLastSsItem);
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Toggle Shield (Ctrl+Shift+S)", null, (_, _) => ToggleCaptureExclusion());
         menu.Items.Add("Verify Protection Now (Ctrl+Shift+V)", null, async (_, _) => await RunLiveCaptureVerificationAsync());
         menu.Items.Add(new ToolStripSeparator());
@@ -877,6 +1003,8 @@ public sealed class MainForm : Form
             return;
         }
 
+        _screenshotWatcher.ScreenshotDetected -= OnUpworkScreenshotDetected;
+        _screenshotWatcher.Dispose();
         SystemEvents.UserPreferenceChanged -= OnSystemPreferenceChanged;
         _guardTimer.Stop();
         _affinityWatchdog.Stop();
@@ -902,13 +1030,13 @@ public sealed class MainForm : Form
 
         if (active)
         {
-            _btnShieldPill.Text = "● Shield Active";
+            _btnShieldPill.Text = "● Protected";
             _btnShieldPill.Tone = ButtonTone.ShieldOn;
-            _trayIcon.Text = "ScreenShield — Active";
+            _trayIcon.Text = "ScreenShield — Protected";
         }
         else if (!_settings.ExcludeWrapperFromCapture)
         {
-            _btnShieldPill.Text = "○ Shield Paused";
+            _btnShieldPill.Text = "○ Paused";
             _btnShieldPill.Tone = ButtonTone.ShieldOff;
             _trayIcon.Text = "ScreenShield — Paused";
         }
@@ -1053,24 +1181,16 @@ public sealed class MainForm : Form
     {
         if (IsDisposed) return;
 
-        string tbText = _taskbarShield.IsTaskbarCurrentlyShielded ? "Taskbar hidden" : "Taskbar normal";
-        if (eval.UpworkRunning && eval.ExposedNativeWindows.Count > 0)
+        if (eval.UpworkRunning != _lastUpworkRunning)
         {
-            _lblGuardStatus.Text = $"Upwork active · {eval.ExposedNativeWindows.Count} blocked open · {tbText}";
-            _lblGuardStatus.ForeColor = _palette.DangerText;
+            AppendLog(eval.UpworkRunning
+                ? "[Upwork] Upwork Time Tracker detected running."
+                : "[Upwork] Upwork Time Tracker stopped.");
         }
-        else if (eval.UpworkRunning)
-        {
-            _lblGuardStatus.Text = $"Upwork active · Clear · {tbText}";
-            _lblGuardStatus.ForeColor = _palette.TextSub;
-        }
-        else
-        {
-            _lblGuardStatus.Text = eval.ExposedNativeWindows.Count > 0
-                ? $"Upwork off · {eval.ExposedNativeWindows.Count} blocked open"
-                : $"Upwork off · {tbText}";
-            _lblGuardStatus.ForeColor = _palette.TextSub;
-        }
+
+        _lastUpworkRunning = eval.UpworkRunning;
+        _lastExposedCount = eval.ExposedNativeWindows.Count;
+        RefreshStatusLine();
 
         foreach (GuardActionItem item in eval.Actions)
         {
@@ -1181,6 +1301,60 @@ public sealed class MainForm : Form
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
     }
 
+    public void CopyActivityLog()
+    {
+        if (!string.IsNullOrEmpty(_txtLog.Text))
+        {
+            try { Clipboard.SetText(_txtLog.Text); }
+            catch { /* Ignore clipboard contention in headless tests */ }
+            AppendLog("Activity log copied to clipboard.");
+        }
+    }
+
+    public void ClearActivityLog()
+    {
+        _txtLog.Clear();
+    }
+
+    private Label CreateSectionHeader(string title)
+    {
+        var lbl = new Label
+        {
+            Text = title,
+            AutoSize = true,
+            UseMnemonic = false,
+            Font = DesignTokens.CreateUiFont(9.5f, semibold: true),
+            Margin = new Padding(0, 2, 0, 4)
+        };
+        _settingsSectionHeaders.Add(lbl);
+        return lbl;
+    }
+
+    private FlowLayoutPanel WrapWithHelp(Control control, string helpText)
+    {
+        var row = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            BackColor = Color.Transparent,
+            Margin = new Padding(0, 1, 8, 2)
+        };
+        var badge = new HelpBadge(helpText, _toolTip);
+        _helpBadges.Add(badge);
+        row.Controls.Add(control);
+        row.Controls.Add(badge);
+        return row;
+    }
+
+    private FlowLayoutPanel CreateLabelWithHelp(string text, string helpText)
+    {
+        var lbl = CreateSettingsSubLabel(text);
+        lbl.Margin = new Padding(0, 4, 2, 0);
+        return WrapWithHelp(lbl, helpText);
+    }
+
     private CheckBox CreateSettingsCheckBox(string text, bool isChecked)
     {
         var chk = new CheckBox
@@ -1188,7 +1362,8 @@ public sealed class MainForm : Form
             Text = text,
             Checked = isChecked,
             AutoSize = true,
-            Margin = new Padding(0, 3, 12, 5)
+            UseMnemonic = false,
+            Margin = new Padding(0, 3, 2, 2)
         };
         chk.CheckedChanged += (_, _) => OnInlineSettingsChanged();
         return chk;
@@ -1200,6 +1375,7 @@ public sealed class MainForm : Form
         {
             Text = text,
             AutoSize = true,
+            UseMnemonic = false,
             Margin = new Padding(0, 6, 0, 2)
         };
         _settingsSubLabels.Add(lbl);
@@ -1217,6 +1393,82 @@ public sealed class MainForm : Form
         }
 
         _txtLog.AppendText(line + Environment.NewLine);
+    }
+
+    private void RefreshStatusLine()
+    {
+        string lastSs = _screenshotWatcher.FormatLastScreenshot(DateTimeOffset.UtcNow);
+        if (_trayLastSsItem is not null)
+        {
+            _trayLastSsItem.Text = lastSs;
+        }
+
+        string tbText = _taskbarShield.IsTaskbarCurrentlyShielded ? " · Taskbar hidden" : string.Empty;
+        if (_lastUpworkRunning && _lastExposedCount > 0)
+        {
+            _lblGuardStatus.Text = $"Upwork tracking · {_lastExposedCount} blocked open · {lastSs}{tbText}";
+            _lblGuardStatus.ForeColor = _palette.DangerText;
+        }
+        else if (_lastUpworkRunning)
+        {
+            _lblGuardStatus.Text = $"Upwork tracking · {lastSs}{tbText}";
+            _lblGuardStatus.ForeColor = _palette.TextSub;
+        }
+        else
+        {
+            _lblGuardStatus.Text = _lastExposedCount > 0
+                ? $"Upwork off · {_lastExposedCount} blocked open · {lastSs}"
+                : $"Upwork off · {lastSs}";
+            _lblGuardStatus.ForeColor = _palette.TextSub;
+        }
+    }
+
+    private void OnPaintBrandLogo(object? sender, PaintEventArgs e)
+    {
+        Graphics g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.Clear(_palette.BaseSurface);
+
+        using var path = new GraphicsPath();
+        path.AddLine(12f, 2f, 21f, 5.5f);
+        path.AddBezier(21f, 5.5f, 21f, 14f, 16.5f, 19.5f, 12f, 22f);
+        path.AddBezier(12f, 22f, 7.5f, 19.5f, 3f, 14f, 3f, 5.5f);
+        path.CloseFigure();
+
+        using (var brush = new LinearGradientBrush(
+            new RectangleF(0, 0, 24, 24),
+            Color.FromArgb(52, 211, 153),
+            Color.FromArgb(16, 185, 129),
+            LinearGradientMode.ForwardDiagonal))
+        {
+            g.FillPath(brush, path);
+        }
+
+        using var checkPen = new Pen(Color.White, 2.2f)
+        {
+            StartCap = LineCap.Round,
+            EndCap = LineCap.Round,
+            LineJoin = LineJoin.Round
+        };
+        g.DrawLines(checkPen, [new PointF(7.8f, 12.2f), new PointF(10.8f, 15.2f), new PointF(16.4f, 9.2f)]);
+    }
+
+    private static Icon LoadOrCreateShieldIcon()
+    {
+        string icoPath = Path.Combine(AppContext.BaseDirectory, "Assets", "screenshield.ico");
+        if (File.Exists(icoPath))
+        {
+            try
+            {
+                return new Icon(icoPath);
+            }
+            catch
+            {
+                // Fall back to GDI+ shield icon below.
+            }
+        }
+
+        return CreateShieldIcon(active: true);
     }
 
     private static Icon CreateShieldIcon(bool active)
