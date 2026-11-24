@@ -26,6 +26,65 @@ public static class Win32Interop
     public const uint SWP_NOZORDER = 0x0004;
     public const uint SWP_NOACTIVATE = 0x0010;
 
+    public const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+    public const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+    public const int DWMWA_CAPTION_COLOR = 35;
+    public const int DWMWA_TEXT_COLOR = 36;
+    public const int DWMWCP_ROUND = 2;
+
+    public const uint TH32CS_SNAPPROCESS = 0x00000002;
+    public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+    public const uint ABM_GETSTATE = 0x00000004;
+    public const uint ABM_SETSTATE = 0x0000000A;
+    public const int ABS_AUTOHIDE = 0x0000001;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct APPBARDATA
+    {
+        public uint cbSize;
+        public IntPtr hWnd;
+        public uint uCallbackMessage;
+        public uint uEdge;
+        public RECT rc;
+        public IntPtr lParam;
+    }
+
+    [DllImport("shell32.dll", SetLastError = true)]
+    public static extern IntPtr SHAppBarMessage(uint dwMessage, ref APPBARDATA pData);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
+
+    public static bool GetTaskbarAutoHideState()
+    {
+        var abd = new APPBARDATA
+        {
+            cbSize = (uint)Marshal.SizeOf<APPBARDATA>(),
+            hWnd = FindWindow("Shell_TrayWnd", null)
+        };
+        IntPtr state = SHAppBarMessage(ABM_GETSTATE, ref abd);
+        return (state.ToInt64() & ABS_AUTOHIDE) != 0;
+    }
+
+    public static bool SetTaskbarAutoHide(bool autoHide)
+    {
+        IntPtr trayHwnd = FindWindow("Shell_TrayWnd", null);
+        if (trayHwnd == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        var abd = new APPBARDATA
+        {
+            cbSize = (uint)Marshal.SizeOf<APPBARDATA>(),
+            hWnd = trayHwnd,
+            lParam = new IntPtr(autoHide ? ABS_AUTOHIDE : 0)
+        };
+        _ = SHAppBarMessage(ABM_SETSTATE, ref abd);
+        return true;
+    }
+
     public static readonly Version MinExcludeFromCaptureOsVersion = new(10, 0, 19041);
 
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
@@ -78,6 +137,60 @@ public static class Win32Interop
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool DestroyIcon(IntPtr hIcon);
+
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct PROCESSENTRY32W
+    {
+        public uint dwSize;
+        public uint cntUsage;
+        public uint th32ProcessID;
+        public IntPtr th32DefaultHeapID;
+        public uint th32ModuleID;
+        public uint cntThreads;
+        public uint th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szExeFile;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool Process32FirstW(IntPtr hSnapshot, ref PROCESSENTRY32W lppe);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool Process32NextW(IntPtr hSnapshot, ref PROCESSENTRY32W lppe);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool CloseHandle(IntPtr hObject);
+
+    public static void ApplyWindows11Chrome(IntPtr hwnd, bool isDark, Color captionColor, Color captionTextColor)
+    {
+        if (hwnd == IntPtr.Zero || Environment.OSVersion.Version.Build < 22000)
+        {
+            return;
+        }
+
+        int dark = isDark ? 1 : 0;
+        _ = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref dark, sizeof(int));
+
+        int corner = DWMWCP_ROUND;
+        _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, sizeof(int));
+
+        int colorRef = captionColor.R | (captionColor.G << 8) | (captionColor.B << 16);
+        _ = DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, ref colorRef, sizeof(int));
+
+        int textRef = captionTextColor.R | (captionTextColor.G << 8) | (captionTextColor.B << 16);
+        _ = DwmSetWindowAttribute(hwnd, DWMWA_TEXT_COLOR, ref textRef, sizeof(int));
+    }
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);

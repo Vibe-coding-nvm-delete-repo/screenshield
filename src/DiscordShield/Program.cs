@@ -21,11 +21,12 @@ public static class Program
         var captureService = new CaptureExclusionService();
         var inspector = new Win32WindowInspector();
         var upworkAutomation = new UpworkAutomationHelper();
+        var taskbarShield = new TaskbarShieldService();
 
-        using var form = new MainForm(settings, captureService, inspector, upworkAutomation);
+        using var form = new MainForm(settings, captureService, inspector, upworkAutomation, taskbarShield);
         if (!string.IsNullOrWhiteSpace(warning))
         {
-            MessageBox.Show(warning, "DiscordShield Settings", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(warning, "ScreenShield Settings", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
         Application.Run(form);

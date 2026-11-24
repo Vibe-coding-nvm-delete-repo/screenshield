@@ -1,4 +1,6 @@
 using DiscordShield.Core;
+using DiscordShield.Native;
+using Microsoft.Win32;
 
 namespace DiscordShield.UI;
 
@@ -13,11 +15,16 @@ public sealed class SettingsDialog : Form
     private readonly CheckBox _chkMinimizeToTray;
     private readonly CheckBox _chkHotkey;
     private readonly NumericUpDown _numCooldown;
+    private readonly MinimalButton _btnSave;
+    private readonly MinimalButton _btnCancel;
+    private readonly List<Label> _subLabels = [];
+    private ThemePalette _palette;
 
     public AppSettings UpdatedSettings { get; private set; }
 
-    public SettingsDialog(AppSettings current)
+    public SettingsDialog(AppSettings current, ThemePalette? palette = null)
     {
+        _palette = palette ?? DesignTokens.SystemDefault();
         UpdatedSettings = new AppSettings
         {
             ExcludeWrapperFromCapture = current.ExcludeWrapperFromCapture,
@@ -32,18 +39,17 @@ public sealed class SettingsDialog : Form
             GuardCooldownSeconds = current.GuardCooldownSeconds
         };
 
-        Text = "DiscordShield Settings";
+        Text = "Settings";
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
         AutoSize = true;
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
-        MinimumSize = new Size(640, 0);
-        Padding = new Padding(18);
-        BackColor = Color.FromArgb(30, 31, 34);
-        ForeColor = Color.FromArgb(242, 243, 245);
-        Font = new Font("Segoe UI", 9.5f);
+        MinimumSize = new Size(580, 0);
+        Padding = new Padding(DesignTokens.DialogPadding);
+        Font = DesignTokens.CreateUiFont(9.5f);
+        KeyPreview = true;
 
         var layout = new TableLayoutPanel
         {
@@ -55,33 +61,32 @@ public sealed class SettingsDialog : Form
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
 
-        _chkExcludeWrapper = AddCheckBox(layout, "Exclude this Discord window from all Windows screenshots (WDA_EXCLUDEFROMCAPTURE)", current.ExcludeWrapperFromCapture);
-        _chkNativeGuard = AddCheckBox(layout, "Monitor native Discord desktop app (Discord.exe)", current.NativeGuardEnabled);
-        _chkOnlyWhenUpwork = AddCheckBox(layout, "Only trigger Native Guard actions while Upwork is running", current.OnlyActWhenUpworkRunning);
+        _chkExcludeWrapper = AddCheckBox(layout, "Hide this Discord window from screenshots", current.ExcludeWrapperFromCapture);
+        _chkNativeGuard = AddCheckBox(layout, "Watch for regular Discord app (Discord.exe)", current.NativeGuardEnabled);
+        _chkOnlyWhenUpwork = AddCheckBox(layout, "Only watch while Upwork is running", current.OnlyActWhenUpworkRunning);
 
-        AddLabel(layout, "Action when native Discord.exe is visible:");
+        AddSubLabel(layout, "When regular Discord is open:");
         _cmbAction = new ComboBox
         {
             Dock = DockStyle.Fill,
             DropDownStyle = ComboBoxStyle.DropDownList,
-            BackColor = Color.FromArgb(43, 45, 49),
-            ForeColor = Color.White,
-            Margin = new Padding(0, 2, 0, 10)
+            FlatStyle = FlatStyle.Flat,
+            Margin = new Padding(0, 4, 0, 12)
         };
         _cmbAction.Items.AddRange(new object[]
         {
-            "Alert Only (Recommended — warn & offer 1-click minimize)",
-            "Auto-Minimize native Discord.exe",
-            "Move native Discord.exe to Secondary Monitor (requires 2+ monitors)",
-            "Pause Upwork Time Tracker (UI Automation) + Alert"
+            "Warn me (Recommended)",
+            "Auto-minimize regular Discord",
+            "Move regular Discord to 2nd monitor",
+            "Pause Upwork & warn me"
         });
         _cmbAction.SelectedIndex = (int)current.NativeGuardAction;
         layout.Controls.Add(_cmbAction);
 
-        AddLabel(layout, "Protected native process names (comma-separated):");
+        AddSubLabel(layout, "Watched desktop apps (comma-separated):");
         _txtProtectedProcesses = AddTextBox(layout, string.Join(", ", current.ProtectedProcessNames));
 
-        AddLabel(layout, "Upwork process names (comma-separated):");
+        AddSubLabel(layout, "Time tracker process names:");
         _txtUpworkProcesses = AddTextBox(layout, string.Join(", ", current.UpworkProcessNames));
 
         var cooldownRow = new FlowLayoutPanel
@@ -90,30 +95,29 @@ public sealed class SettingsDialog : Form
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
-            Margin = new Padding(0, 4, 0, 10)
+            Margin = new Padding(0, 4, 0, 12)
         };
-        cooldownRow.Controls.Add(new Label
+        var lblCooldown = new Label
         {
-            Text = "Guard cooldown (seconds):",
+            Text = "Alert cooldown (seconds):",
             AutoSize = true,
-            Anchor = AnchorStyles.Left,
-            Padding = new Padding(0, 4, 10, 0),
-            ForeColor = Color.FromArgb(181, 186, 193)
-        });
+            Padding = new Padding(0, 4, 12, 0)
+        };
+        _subLabels.Add(lblCooldown);
         _numCooldown = new NumericUpDown
         {
-            Width = 90,
+            Width = 84,
             Minimum = 1,
             Maximum = 300,
             Value = Math.Clamp(current.GuardCooldownSeconds, 1, 300),
-            BackColor = Color.FromArgb(43, 45, 49),
-            ForeColor = Color.White
+            BorderStyle = BorderStyle.FixedSingle
         };
+        cooldownRow.Controls.Add(lblCooldown);
         cooldownRow.Controls.Add(_numCooldown);
         layout.Controls.Add(cooldownRow);
 
-        _chkMinimizeToTray = AddCheckBox(layout, "Minimize to system tray when clicking Close (X)", current.MinimizeToTrayOnClose);
-        _chkHotkey = AddCheckBox(layout, "Enable global show/hide hotkey (Ctrl + Shift + D)", current.EnableGlobalHotkey);
+        _chkMinimizeToTray = AddCheckBox(layout, "Keep running in system tray when closed", current.MinimizeToTrayOnClose);
+        _chkHotkey = AddCheckBox(layout, "Quick show/hide shortcut (Ctrl + Shift + D)", current.EnableGlobalHotkey);
 
         var buttonRow = new FlowLayoutPanel
         {
@@ -121,81 +125,121 @@ public sealed class SettingsDialog : Form
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             FlowDirection = FlowDirection.RightToLeft,
-            Margin = new Padding(0, 14, 0, 0)
+            Margin = new Padding(0, 16, 0, 0)
         };
 
-        var btnCancel = new Button
+        _btnSave = new MinimalButton("Save", ButtonTone.Accent);
+        _btnSave.Click += (_, _) =>
         {
-            Text = "Cancel",
-            DialogResult = DialogResult.Cancel,
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Padding = new Padding(14, 6, 14, 6),
-            Margin = new Padding(8, 0, 0, 0),
-            FlatStyle = FlatStyle.Flat,
-            BackColor = Color.FromArgb(78, 80, 88),
-            ForeColor = Color.White
+            CommitSettings();
+            DialogResult = DialogResult.OK;
+            Close();
         };
-        btnCancel.FlatAppearance.BorderSize = 0;
 
-        var btnSave = new Button
+        _btnCancel = new MinimalButton("Cancel", ButtonTone.Quiet);
+        _btnCancel.Click += (_, _) =>
         {
-            Text = "Save Settings",
-            DialogResult = DialogResult.OK,
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Padding = new Padding(14, 6, 14, 6),
-            Margin = new Padding(0),
-            FlatStyle = FlatStyle.Flat,
-            BackColor = Color.FromArgb(35, 165, 90),
-            ForeColor = Color.White
+            DialogResult = DialogResult.Cancel;
+            Close();
         };
-        btnSave.FlatAppearance.BorderSize = 0;
-        btnSave.Click += (_, _) => CommitSettings();
 
-        buttonRow.Controls.Add(btnCancel);
-        buttonRow.Controls.Add(btnSave);
+        buttonRow.Controls.Add(_btnSave);
+        buttonRow.Controls.Add(_btnCancel);
         layout.Controls.Add(buttonRow);
 
         Controls.Add(layout);
-        AcceptButton = btnSave;
-        CancelButton = btnCancel;
+        ApplyTheme(_palette);
     }
 
-    private static CheckBox AddCheckBox(TableLayoutPanel layout, string text, bool isChecked)
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        Win32Interop.ApplyWindows11Chrome(Handle, _palette.IsDark, _palette.BaseSurface, _palette.TextPrimary);
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        if (e.KeyCode == Keys.Escape)
+        {
+            DialogResult = DialogResult.Cancel;
+            Close();
+        }
+        else if (e.KeyCode == Keys.Enter && ActiveControl is not ComboBox)
+        {
+            CommitSettings();
+            DialogResult = DialogResult.OK;
+            Close();
+        }
+    }
+
+    public void ApplyTheme(ThemePalette palette)
+    {
+        _palette = palette;
+        BackColor = palette.BaseSurface;
+        ForeColor = palette.TextPrimary;
+
+        foreach (Label lbl in _subLabels)
+        {
+            lbl.ForeColor = palette.TextSub;
+        }
+
+        _chkExcludeWrapper.ForeColor = palette.TextPrimary;
+        _chkNativeGuard.ForeColor = palette.TextPrimary;
+        _chkOnlyWhenUpwork.ForeColor = palette.TextPrimary;
+        _chkMinimizeToTray.ForeColor = palette.TextPrimary;
+        _chkHotkey.ForeColor = palette.TextPrimary;
+
+        _cmbAction.BackColor = palette.InputSurface;
+        _cmbAction.ForeColor = palette.TextPrimary;
+        _txtProtectedProcesses.BackColor = palette.InputSurface;
+        _txtProtectedProcesses.ForeColor = palette.TextPrimary;
+        _txtUpworkProcesses.BackColor = palette.InputSurface;
+        _txtUpworkProcesses.ForeColor = palette.TextPrimary;
+        _numCooldown.BackColor = palette.InputSurface;
+        _numCooldown.ForeColor = palette.TextPrimary;
+
+        _btnSave.ApplyTheme(palette);
+        _btnCancel.ApplyTheme(palette);
+
+        if (IsHandleCreated)
+        {
+            Win32Interop.ApplyWindows11Chrome(Handle, palette.IsDark, palette.BaseSurface, palette.TextPrimary);
+        }
+    }
+
+    private CheckBox AddCheckBox(TableLayoutPanel layout, string text, bool isChecked)
     {
         var chk = new CheckBox
         {
             Text = text,
             Checked = isChecked,
             AutoSize = true,
-            Margin = new Padding(0, 3, 0, 5),
-            ForeColor = Color.FromArgb(242, 243, 245)
+            Margin = new Padding(0, 4, 0, 6)
         };
         layout.Controls.Add(chk);
         return chk;
     }
 
-    private static void AddLabel(TableLayoutPanel layout, string text)
+    private void AddSubLabel(TableLayoutPanel layout, string text)
     {
-        layout.Controls.Add(new Label
+        var lbl = new Label
         {
             Text = text,
             AutoSize = true,
-            Margin = new Padding(0, 6, 0, 2),
-            ForeColor = Color.FromArgb(181, 186, 193)
-        });
+            Margin = new Padding(0, 8, 0, 2)
+        };
+        _subLabels.Add(lbl);
+        layout.Controls.Add(lbl);
     }
 
-    private static TextBox AddTextBox(TableLayoutPanel layout, string value)
+    private TextBox AddTextBox(TableLayoutPanel layout, string value)
     {
         var txt = new TextBox
         {
             Text = value,
             Dock = DockStyle.Fill,
             Margin = new Padding(0, 2, 0, 8),
-            BackColor = Color.FromArgb(43, 45, 49),
-            ForeColor = Color.White,
             BorderStyle = BorderStyle.FixedSingle
         };
         layout.Controls.Add(txt);

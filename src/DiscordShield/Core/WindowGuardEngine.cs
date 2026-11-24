@@ -1,4 +1,4 @@
-using System.Diagnostics;
+using System.Runtime.InteropServices;
 using DiscordShield.Native;
 
 namespace DiscordShield.Core;
@@ -27,7 +27,8 @@ public sealed record GuardEvaluation(
     bool UpworkRunning,
     IReadOnlyList<WindowSnapshot> ExposedNativeWindows,
     IReadOnlyList<GuardActionItem> Actions,
-    string StatusSummary);
+    string StatusSummary,
+    bool ShouldHideTaskbar = false);
 
 public interface IWindowInspector
 {
@@ -40,10 +41,52 @@ public interface IWindowInspector
 
 public sealed class Win32WindowInspector : IWindowInspector
 {
+    private static Dictionary<int, string> BuildPidMapSnapshot()
+    {
+        var map = new Dictionary<int, string>(256);
+        IntPtr snap = Win32Interop.CreateToolhelp32Snapshot(Win32Interop.TH32CS_SNAPPROCESS, 0);
+        if (snap == IntPtr.Zero || snap == new IntPtr(-1))
+        {
+            return map;
+        }
+
+        try
+        {
+            var entry = new Win32Interop.PROCESSENTRY32W
+            {
+                dwSize = (uint)Marshal.SizeOf<Win32Interop.PROCESSENTRY32W>()
+            };
+
+            if (Win32Interop.Process32FirstW(snap, ref entry))
+            {
+                do
+                {
+                    string exe = entry.szExeFile;
+                    if (!string.IsNullOrEmpty(exe))
+                    {
+                        if (exe.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                        {
+                            exe = exe[..^4];
+                        }
+
+                        map[unchecked((int)entry.th32ProcessID)] = exe;
+                    }
+                }
+                while (Win32Interop.Process32NextW(snap, ref entry));
+            }
+        }
+        finally
+        {
+            _ = Win32Interop.CloseHandle(snap);
+        }
+
+        return map;
+    }
+
     public IReadOnlyList<WindowSnapshot> GetTopLevelWindows()
     {
-        var results = new List<WindowSnapshot>();
-        var pidCache = new Dictionary<int, string>();
+        var results = new List<WindowSnapshot>(64);
+        Dictionary<int, string> pidCache = BuildPidMapSnapshot();
 
         Win32Interop.EnumWindows((hwnd, lParam) =>
         {
@@ -54,27 +97,7 @@ public sealed class Win32WindowInspector : IWindowInspector
 
             _ = Win32Interop.GetWindowThreadProcessId(hwnd, out uint rawPid);
             int pid = unchecked((int)rawPid);
-            if (pid <= 0)
-            {
-                return true;
-            }
-
-            if (!pidCache.TryGetValue(pid, out string? processName))
-            {
-                try
-                {
-                    using var proc = Process.GetProcessById(pid);
-                    processName = proc.ProcessName;
-                }
-                catch
-                {
-                    processName = string.Empty;
-                }
-
-                pidCache[pid] = processName;
-            }
-
-            if (string.IsNullOrEmpty(processName))
+            if (pid <= 0 || !pidCache.TryGetValue(pid, out string? processName) || string.IsNullOrEmpty(processName))
             {
                 return true;
             }
@@ -94,26 +117,8 @@ public sealed class Win32WindowInspector : IWindowInspector
 
     public IReadOnlyList<string> GetRunningProcessNames()
     {
-        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (Process proc in Process.GetProcesses())
-        {
-            try
-            {
-                if (!string.IsNullOrWhiteSpace(proc.ProcessName))
-                {
-                    names.Add(proc.ProcessName);
-                }
-            }
-            catch
-            {
-                // Ignore processes that exit or deny access during enumeration.
-            }
-            finally
-            {
-                proc.Dispose();
-            }
-        }
-
+        Dictionary<int, string> pidMap = BuildPidMapSnapshot();
+        var names = new HashSet<string>(pidMap.Values, StringComparer.OrdinalIgnoreCase);
         return names.ToList();
     }
 
@@ -199,7 +204,9 @@ public sealed class WindowGuardEngine
                 && !w.IsMinimized
                 && w.Bounds.Width > 50
                 && w.Bounds.Height > 50
-                && protectedSet.Contains(w.ProcessName))
+                && (protectedSet.Contains(w.ProcessName)
+                    || (ActiveCatalogService.BrowserProcesses.Contains(w.ProcessName)
+                        && ActiveCatalogService.MatchesBlockedSite(w.Title, settings.BlockedDomains))))
             .ToList();
 
         if (!settings.NativeGuardEnabled)
@@ -208,15 +215,16 @@ public sealed class WindowGuardEngine
                 upworkRunning,
                 exposed,
                 Array.Empty<GuardActionItem>(),
-                "Native Discord Guard is paused.");
+                "Shield guard is paused.",
+                ShouldHideTaskbar: false);
         }
 
         if (exposed.Count == 0)
         {
             string msg = upworkRunning
-                ? "Clear: Upwork detected, no exposed native Discord windows."
-                : "Clear: No exposed native Discord windows.";
-            return new GuardEvaluation(upworkRunning, exposed, Array.Empty<GuardActionItem>(), msg);
+                ? "Clear: Upwork active, no blocked apps or sites open."
+                : "Clear: No blocked apps or sites open.";
+            return new GuardEvaluation(upworkRunning, exposed, Array.Empty<GuardActionItem>(), msg, ShouldHideTaskbar: false);
         }
 
         if (settings.OnlyActWhenUpworkRunning && !upworkRunning)
@@ -225,8 +233,11 @@ public sealed class WindowGuardEngine
                 false,
                 exposed,
                 Array.Empty<GuardActionItem>(),
-                $"Standby: {exposed.Count} native Discord window(s) open, but Upwork is not running.");
+                $"Standby: {exposed.Count} blocked item(s) open, Upwork is off.",
+                ShouldHideTaskbar: false);
         }
+
+        bool shouldHideTaskbar = settings.AlwaysHideTaskbarWhenBlockedOpen;
 
         ScreenSnapshot? secondaryScreen = screens.FirstOrDefault(s => !s.IsPrimary);
         var actions = new List<GuardActionItem>();
@@ -278,10 +289,10 @@ public sealed class WindowGuardEngine
         }
 
         string summary = actions.Count > 0
-            ? $"Action triggered for {actions.Count} exposed native window(s)."
-            : $"Exposed native Discord window(s) detected ({exposed.Count}); within cooldown or already on secondary monitor.";
+            ? $"Action triggered for {actions.Count} blocked window(s)."
+            : $"Blocked window(s) detected ({exposed.Count}); within cooldown or already on secondary monitor.";
 
-        return new GuardEvaluation(upworkRunning, exposed, actions, summary);
+        return new GuardEvaluation(upworkRunning, exposed, actions, summary, shouldHideTaskbar);
     }
 
     public static bool IsWindowMostlyOnScreen(Rectangle windowBounds, Rectangle screenArea)
