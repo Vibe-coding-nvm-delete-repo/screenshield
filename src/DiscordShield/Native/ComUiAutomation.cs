@@ -120,6 +120,14 @@ public static class ComUiAutomation
         }
     }
 
+    private static void SafeReleaseCom(object? comObj)
+    {
+        if (comObj is not null && Marshal.IsComObject(comObj))
+        {
+            _ = Marshal.ReleaseComObject(comObj);
+        }
+    }
+
     public static List<string> ReadTabItemNames(IntPtr hwnd, int maxTabs = 40)
     {
         var results = new List<string>();
@@ -129,30 +137,35 @@ public static class ComUiAutomation
         if (uia is null) return results;
 
         IntPtr cond = IntPtr.Zero;
+        IUIAutomationElement? root = null;
+        IUIAutomationElementArray? found = null;
         try
         {
-            uia.ElementFromHandle(hwnd, out IUIAutomationElement? root);
+            uia.ElementFromHandle(hwnd, out root);
             if (root is null) return results;
 
             uia.CreatePropertyCondition(UIA_ControlTypePropertyId, UIA_TabItemControlTypeId, out cond);
-            root.FindAll(TreeScope_Descendants, cond, out IUIAutomationElementArray? found);
+            root.FindAll(TreeScope_Descendants, cond, out found);
             if (found is null) return results;
 
             int count = Math.Min(found.Length, maxTabs);
             for (int i = 0; i < count; i++)
             {
-                found.GetElement(i, out IUIAutomationElement? el);
-                string? name = el?.CurrentName;
-                if (!string.IsNullOrWhiteSpace(name))
+                IUIAutomationElement? el = null;
+                try
                 {
-                    results.Add(name);
+                    found.GetElement(i, out el);
+                    string? name = el?.CurrentName;
+                    if (!string.IsNullOrWhiteSpace(name))
+                    {
+                        results.Add(name);
+                    }
                 }
-
-                if (el is not null) Marshal.ReleaseComObject(el);
+                finally
+                {
+                    SafeReleaseCom(el);
+                }
             }
-
-            Marshal.ReleaseComObject(found);
-            Marshal.ReleaseComObject(root);
         }
         catch
         {
@@ -160,8 +173,10 @@ public static class ComUiAutomation
         }
         finally
         {
+            SafeReleaseCom(found);
+            SafeReleaseCom(root);
             if (cond != IntPtr.Zero) Marshal.Release(cond);
-            Marshal.ReleaseComObject(uia);
+            SafeReleaseCom(uia);
         }
 
         return results;
@@ -177,72 +192,68 @@ public static class ComUiAutomation
         IntPtr btnCond = IntPtr.Zero;
         IntPtr chkCond = IntPtr.Zero;
         IntPtr orCond = IntPtr.Zero;
+        IUIAutomationElement? root = null;
+        IUIAutomationElementArray? found = null;
         try
         {
-            uia.ElementFromHandle(hwnd, out IUIAutomationElement? root);
+            uia.ElementFromHandle(hwnd, out root);
             if (root is null) return (false, "Could not inspect window.");
 
             uia.CreatePropertyCondition(UIA_ControlTypePropertyId, UIA_ButtonControlTypeId, out btnCond);
             uia.CreatePropertyCondition(UIA_ControlTypePropertyId, UIA_CheckBoxControlTypeId, out chkCond);
             uia.CreateOrCondition(btnCond, chkCond, out orCond);
 
-            root.FindAll(TreeScope_Descendants, orCond, out IUIAutomationElementArray? found);
-            if (found is null)
-            {
-                Marshal.ReleaseComObject(root);
-                return (false, "No controls found.");
-            }
+            root.FindAll(TreeScope_Descendants, orCond, out found);
+            if (found is null) return (false, "No controls found.");
 
             int count = found.Length;
             for (int i = 0; i < count; i++)
             {
-                found.GetElement(i, out IUIAutomationElement? el);
-                if (el is null) continue;
-
+                IUIAutomationElement? el = null;
                 try
                 {
+                    found.GetElement(i, out el);
+                    if (el is null) continue;
+
                     string name = el.CurrentName ?? string.Empty;
                     if (!namePredicate(name)) continue;
 
-                    el.GetCurrentPattern(UIA_TogglePatternId, out object? toggleObj);
-                    if (toggleObj is IUIAutomationTogglePattern toggle)
+                    object? toggleObj = null;
+                    try
                     {
-                        try
+                        el.GetCurrentPattern(UIA_TogglePatternId, out toggleObj);
+                        if (toggleObj is IUIAutomationTogglePattern toggle && toggle.CurrentToggleState == ToggleState_On)
                         {
-                            if (toggle.CurrentToggleState == ToggleState_On)
-                            {
-                                toggle.Toggle();
-                                return (true, $"Toggled Upwork control '{name}' off via UI Automation.");
-                            }
-                        }
-                        finally
-                        {
-                            Marshal.ReleaseComObject(toggle);
+                            toggle.Toggle();
+                            return (true, $"Toggled Upwork control '{name}' off via UI Automation.");
                         }
                     }
-
-                    el.GetCurrentPattern(UIA_InvokePatternId, out object? invokeObj);
-                    if (invokeObj is IUIAutomationInvokePattern invoke)
+                    finally
                     {
-                        try
+                        SafeReleaseCom(toggleObj);
+                    }
+
+                    object? invokeObj = null;
+                    try
+                    {
+                        el.GetCurrentPattern(UIA_InvokePatternId, out invokeObj);
+                        if (invokeObj is IUIAutomationInvokePattern invoke)
                         {
                             invoke.Invoke();
                             return (true, $"Invoked Upwork control '{name}' via UI Automation.");
                         }
-                        finally
-                        {
-                            Marshal.ReleaseComObject(invoke);
-                        }
+                    }
+                    finally
+                    {
+                        SafeReleaseCom(invokeObj);
                     }
                 }
                 finally
                 {
-                    Marshal.ReleaseComObject(el);
+                    SafeReleaseCom(el);
                 }
             }
 
-            Marshal.ReleaseComObject(found);
-            Marshal.ReleaseComObject(root);
             return (false, "Upwork window found, but no active Stop/Pause button matched.");
         }
         catch (Exception ex)
@@ -251,10 +262,12 @@ public static class ComUiAutomation
         }
         finally
         {
+            SafeReleaseCom(found);
+            SafeReleaseCom(root);
             if (orCond != IntPtr.Zero) Marshal.Release(orCond);
             if (chkCond != IntPtr.Zero) Marshal.Release(chkCond);
             if (btnCond != IntPtr.Zero) Marshal.Release(btnCond);
-            Marshal.ReleaseComObject(uia);
+            SafeReleaseCom(uia);
         }
     }
 }
