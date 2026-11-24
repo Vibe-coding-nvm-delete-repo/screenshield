@@ -1423,10 +1423,6 @@ public sealed class MainForm : Form
             {
                 _ = Win32Interop.ShowWindow(Handle, Win32Interop.SW_RESTORE);
             }
-            else
-            {
-                _ = Win32Interop.ShowWindow(Handle, Win32Interop.SW_SHOW);
-            }
 
             _ = Win32Interop.SetForegroundWindow(Handle);
         }
