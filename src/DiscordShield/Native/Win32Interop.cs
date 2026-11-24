@@ -141,6 +141,22 @@ public static class Win32Interop
     [DllImport("dwmapi.dll")]
     public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
 
+    [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
+    public static extern int SetWindowTheme(IntPtr hWnd, string? pszSubAppName, string? pszSubIdList);
+
+    public static void ApplyDarkScrollbarTheme(IntPtr hwnd, bool isDark)
+    {
+        if (hwnd == IntPtr.Zero) return;
+        try
+        {
+            _ = SetWindowTheme(hwnd, isDark ? "DarkMode_Explorer" : "Explorer", null);
+        }
+        catch
+        {
+            // Older Windows builds may not support DarkMode_Explorer.
+        }
+    }
+
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct PROCESSENTRY32W
     {
@@ -171,6 +187,25 @@ public static class Win32Interop
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool CloseHandle(IntPtr hObject);
+
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetCurrentProcess();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetProcessWorkingSetSize(IntPtr hProcess, nint dwMinimumWorkingSetSize, nint dwMaximumWorkingSetSize);
+
+    public static void TrimWorkingSetMemory()
+    {
+        try
+        {
+            _ = SetProcessWorkingSetSize(GetCurrentProcess(), -1, -1);
+        }
+        catch
+        {
+            // Best-effort memory trim; never fail if OS denies.
+        }
+    }
 
     public static void ApplyWindows11Chrome(IntPtr hwnd, bool isDark, Color captionColor, Color captionTextColor)
     {

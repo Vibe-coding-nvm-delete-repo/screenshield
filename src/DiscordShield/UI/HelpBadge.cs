@@ -4,21 +4,23 @@ namespace DiscordShield.UI;
 
 /// <summary>
 /// Minimalist, accessible (?) help icon (24x24 hit target, 16px visual circle)
-/// that explains a setting in plain English on BOTH hover and click/keyboard press.
+/// that opens a theme-aware, word-wrapped, edge-clamped HelpPopover on hover, click, or Space/Enter.
 /// </summary>
 public sealed class HelpBadge : Control
 {
-    private readonly ToolTip _toolTip;
+    private readonly Action<HelpBadge, string> _onShow;
+    private readonly Action _onHide;
     private ThemePalette _palette = DesignTokens.Dark;
     private bool _hovered;
     private readonly Font _glyphFont;
 
     public string HelpText { get; }
 
-    public HelpBadge(string helpText, ToolTip sharedToolTip)
+    public HelpBadge(string helpText, Action<HelpBadge, string> onShow, Action onHide)
     {
         HelpText = helpText;
-        _toolTip = sharedToolTip;
+        _onShow = onShow;
+        _onHide = onHide;
 
         SetStyle(
             ControlStyles.UserPaint
@@ -35,8 +37,6 @@ public sealed class HelpBadge : Control
         AccessibleName = "Help";
         AccessibleDescription = helpText;
         _glyphFont = DesignTokens.CreateUiFont(8f, semibold: true);
-
-        _toolTip.SetToolTip(this, helpText);
     }
 
     public void ApplyTheme(ThemePalette palette)
@@ -50,6 +50,7 @@ public sealed class HelpBadge : Control
         base.OnMouseEnter(e);
         _hovered = true;
         Invalidate();
+        _onShow(this, HelpText);
     }
 
     protected override void OnMouseLeave(EventArgs e)
@@ -57,12 +58,13 @@ public sealed class HelpBadge : Control
         base.OnMouseLeave(e);
         _hovered = false;
         Invalidate();
+        _onHide();
     }
 
     protected override void OnClick(EventArgs e)
     {
         base.OnClick(e);
-        ShowHelpPopup();
+        _onShow(this, HelpText);
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
@@ -71,17 +73,27 @@ public sealed class HelpBadge : Control
         if (e.KeyCode is Keys.Space or Keys.Enter)
         {
             e.Handled = true;
-            ShowHelpPopup();
+            _onShow(this, HelpText);
+        }
+        else if (e.KeyCode == Keys.Escape)
+        {
+            _onHide();
         }
     }
 
-    private void ShowHelpPopup()
+    protected override void OnGotFocus(EventArgs e)
     {
-        _toolTip.Show(HelpText, this, 0, Height + 4, 6500);
+        base.OnGotFocus(e);
+        Invalidate();
+        _onShow(this, HelpText);
     }
 
-    protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
-    protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
+    protected override void OnLostFocus(EventArgs e)
+    {
+        base.OnLostFocus(e);
+        Invalidate();
+        _onHide();
+    }
 
     protected override void OnPaint(PaintEventArgs e)
     {

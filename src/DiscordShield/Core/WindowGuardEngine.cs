@@ -1,7 +1,13 @@
 using System.Runtime.InteropServices;
 using DiscordShield.Native;
+using Microsoft.Win32;
 
 namespace DiscordShield.Core;
+
+public sealed record DesktopSnapshot(
+    IReadOnlyList<WindowSnapshot> Windows,
+    IReadOnlyList<string> RunningProcessNames,
+    IReadOnlyList<ScreenSnapshot> Screens);
 
 public sealed record WindowSnapshot(
     IntPtr Handle,
@@ -32,6 +38,7 @@ public sealed record GuardEvaluation(
 
 public interface IWindowInspector
 {
+    DesktopSnapshot CaptureDesktopSnapshot();
     IReadOnlyList<WindowSnapshot> GetTopLevelWindows();
     IReadOnlyList<string> GetRunningProcessNames();
     IReadOnlyList<ScreenSnapshot> GetScreens();
@@ -41,6 +48,30 @@ public interface IWindowInspector
 
 public sealed class Win32WindowInspector : IWindowInspector
 {
+    private volatile IReadOnlyList<ScreenSnapshot>? _cachedScreens;
+
+    public Win32WindowInspector()
+    {
+        SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
+    }
+
+    private void OnDisplaySettingsChanged(object? sender, EventArgs e)
+    {
+        _cachedScreens = null;
+    }
+
+    /// <summary>
+    /// Single-pass desktop capture: runs CreateToolhelp32Snapshot ONCE and reuses the PID map
+    /// for both EnumWindows and RunningProcessNames, plus cached Screen snapshots.
+    /// </summary>
+    public DesktopSnapshot CaptureDesktopSnapshot()
+    {
+        Dictionary<int, string> pidCache = BuildPidMapSnapshot();
+        List<WindowSnapshot> windows = EnumerateVisibleWindows(pidCache);
+        var uniqueNames = new HashSet<string>(pidCache.Values, StringComparer.OrdinalIgnoreCase);
+        return new DesktopSnapshot(windows, uniqueNames.ToList(), GetScreens());
+    }
+
     private static Dictionary<int, string> BuildPidMapSnapshot()
     {
         var map = new Dictionary<int, string>(256);
@@ -83,10 +114,9 @@ public sealed class Win32WindowInspector : IWindowInspector
         return map;
     }
 
-    public IReadOnlyList<WindowSnapshot> GetTopLevelWindows()
+    private static List<WindowSnapshot> EnumerateVisibleWindows(Dictionary<int, string> pidCache)
     {
         var results = new List<WindowSnapshot>(64);
-        Dictionary<int, string> pidCache = BuildPidMapSnapshot();
 
         Win32Interop.EnumWindows((hwnd, lParam) =>
         {
@@ -115,6 +145,11 @@ public sealed class Win32WindowInspector : IWindowInspector
         return results;
     }
 
+    public IReadOnlyList<WindowSnapshot> GetTopLevelWindows()
+    {
+        return EnumerateVisibleWindows(BuildPidMapSnapshot());
+    }
+
     public IReadOnlyList<string> GetRunningProcessNames()
     {
         Dictionary<int, string> pidMap = BuildPidMapSnapshot();
@@ -124,9 +159,22 @@ public sealed class Win32WindowInspector : IWindowInspector
 
     public IReadOnlyList<ScreenSnapshot> GetScreens()
     {
-        return Screen.AllScreens
-            .Select(s => new ScreenSnapshot(s.DeviceName, s.Primary, s.WorkingArea))
-            .ToList();
+        IReadOnlyList<ScreenSnapshot>? cached = _cachedScreens;
+        if (cached is not null)
+        {
+            return cached;
+        }
+
+        Screen[] all = Screen.AllScreens;
+        var list = new ScreenSnapshot[all.Length];
+        for (int i = 0; i < all.Length; i++)
+        {
+            Screen s = all[i];
+            list[i] = new ScreenSnapshot(s.DeviceName, s.Primary, s.WorkingArea);
+        }
+
+        _cachedScreens = list;
+        return list;
     }
 
     public bool MinimizeWindow(IntPtr hwnd)
@@ -191,23 +239,58 @@ public sealed class WindowGuardEngine
         AppSettings settings,
         DateTimeOffset now)
     {
-        var protectedSet = new HashSet<string>(settings.ProtectedProcessNames, StringComparer.OrdinalIgnoreCase);
-        var upworkSet = new HashSet<string>(settings.UpworkProcessNames, StringComparer.OrdinalIgnoreCase);
+        List<string> upworkProcs = settings.UpworkProcessNames;
+        List<string> protectedProcs = settings.ProtectedProcessNames;
+        List<string> blockedDomains = settings.BlockedDomains;
 
-        bool upworkRunning = runningProcessNames.Any(upworkSet.Contains)
-            || windows.Any(w => upworkSet.Contains(w.ProcessName));
+        bool upworkRunning = false;
+        for (int i = 0; i < runningProcessNames.Count; i++)
+        {
+            if (ContainsIgnoreCase(upworkProcs, runningProcessNames[i]))
+            {
+                upworkRunning = true;
+                break;
+            }
+        }
 
-        var exposed = windows
-            .Where(w =>
-                w.ProcessId != _selfProcessId
-                && w.IsVisible
-                && !w.IsMinimized
-                && w.Bounds.Width > 50
-                && w.Bounds.Height > 50
-                && (protectedSet.Contains(w.ProcessName)
-                    || (ActiveCatalogService.BrowserProcesses.Contains(w.ProcessName)
-                        && ActiveCatalogService.MatchesBlockedSite(w.Title, settings.BlockedDomains))))
-            .ToList();
+        if (!upworkRunning)
+        {
+            for (int i = 0; i < windows.Count; i++)
+            {
+                if (ContainsIgnoreCase(upworkProcs, windows[i].ProcessName))
+                {
+                    upworkRunning = true;
+                    break;
+                }
+            }
+        }
+
+        List<WindowSnapshot>? exposedList = null;
+        for (int i = 0; i < windows.Count; i++)
+        {
+            WindowSnapshot w = windows[i];
+            if (w.ProcessId == _selfProcessId
+                || !w.IsVisible
+                || w.IsMinimized
+                || w.Bounds.Width <= 50
+                || w.Bounds.Height <= 50)
+            {
+                continue;
+            }
+
+            bool isBlocked = ContainsIgnoreCase(protectedProcs, w.ProcessName)
+                || (blockedDomains.Count > 0
+                    && ActiveCatalogService.BrowserProcesses.Contains(w.ProcessName)
+                    && ActiveCatalogService.MatchesBlockedSite(w.Title, blockedDomains));
+
+            if (isBlocked)
+            {
+                exposedList ??= new List<WindowSnapshot>(4);
+                exposedList.Add(w);
+            }
+        }
+
+        IReadOnlyList<WindowSnapshot> exposed = exposedList is not null ? exposedList : Array.Empty<WindowSnapshot>();
 
         if (!settings.NativeGuardEnabled)
         {
@@ -238,13 +321,22 @@ public sealed class WindowGuardEngine
         }
 
         bool shouldHideTaskbar = settings.AlwaysHideTaskbarWhenBlockedOpen;
+        ScreenSnapshot? secondaryScreen = null;
+        for (int i = 0; i < screens.Count; i++)
+        {
+            if (!screens[i].IsPrimary)
+            {
+                secondaryScreen = screens[i];
+                break;
+            }
+        }
 
-        ScreenSnapshot? secondaryScreen = screens.FirstOrDefault(s => !s.IsPrimary);
-        var actions = new List<GuardActionItem>();
+        List<GuardActionItem>? actionsList = null;
         var cooldown = TimeSpan.FromSeconds(Math.Max(1, settings.GuardCooldownSeconds));
 
-        foreach (WindowSnapshot win in exposed)
+        for (int i = 0; i < exposed.Count; i++)
         {
+            WindowSnapshot win = exposed[i];
             if (_lastActionByHandle.TryGetValue(win.Handle, out DateTimeOffset lastTime)
                 && (now - lastTime) < cooldown)
             {
@@ -255,10 +347,11 @@ public sealed class WindowGuardEngine
             {
                 if (secondaryScreen is null)
                 {
-                    actions.Add(new GuardActionItem(
+                    actionsList ??= new List<GuardActionItem>(exposed.Count);
+                    actionsList.Add(new GuardActionItem(
                         win,
                         NativeGuardAction.AlertOnly,
-                        $"Only {screens.Count} monitor detected — cannot move {win.ProcessName} to a secondary monitor. Use Invisible Discord or Auto-Minimize."));
+                        $"Only {screens.Count} monitor detected — cannot move {win.ProcessName} to a secondary monitor. Use Auto-Minimize instead."));
                     _lastActionByHandle[win.Handle] = now;
                     continue;
                 }
@@ -268,7 +361,8 @@ public sealed class WindowGuardEngine
                     continue;
                 }
 
-                actions.Add(new GuardActionItem(
+                actionsList ??= new List<GuardActionItem>(exposed.Count);
+                actionsList.Add(new GuardActionItem(
                     win,
                     NativeGuardAction.MoveToSecondaryMonitor,
                     $"Moving {win.ProcessName} to secondary monitor {secondaryScreen.DeviceName}.",
@@ -279,20 +373,35 @@ public sealed class WindowGuardEngine
 
             string reason = settings.NativeGuardAction switch
             {
-                NativeGuardAction.AutoMinimize => $"Auto-minimizing exposed native window '{win.ProcessName}' while Upwork protection is active.",
-                NativeGuardAction.PauseUpworkAndAlert => $"Exposed native window '{win.ProcessName}' detected — attempting to pause Upwork Time Tracker and alerting.",
+                NativeGuardAction.AutoMinimize => $"Auto-minimizing blocked '{win.ProcessName}' window while Upwork protection is active.",
+                NativeGuardAction.PauseUpworkAndAlert => $"Blocked '{win.ProcessName}' window detected — attempting to pause Upwork Time Tracker.",
                 _ => $"Blocked '{win.ProcessName}' window is visible to screenshots — minimize or close it."
             };
 
-            actions.Add(new GuardActionItem(win, settings.NativeGuardAction, reason));
+            actionsList ??= new List<GuardActionItem>(exposed.Count);
+            actionsList.Add(new GuardActionItem(win, settings.NativeGuardAction, reason));
             _lastActionByHandle[win.Handle] = now;
         }
 
+        IReadOnlyList<GuardActionItem> actions = actionsList is not null ? actionsList : Array.Empty<GuardActionItem>();
         string summary = actions.Count > 0
             ? $"Action triggered for {actions.Count} blocked window(s)."
             : $"Blocked window(s) detected ({exposed.Count}); within cooldown or already on secondary monitor.";
 
         return new GuardEvaluation(upworkRunning, exposed, actions, summary, shouldHideTaskbar);
+    }
+
+    private static bool ContainsIgnoreCase(List<string> list, string value)
+    {
+        for (int i = 0; i < list.Count; i++)
+        {
+            if (string.Equals(list[i], value, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public static bool IsWindowMostlyOnScreen(Rectangle windowBounds, Rectangle screenArea)

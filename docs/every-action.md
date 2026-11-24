@@ -4,30 +4,30 @@
 
 | Action | Door | Shortcut | Median (ms) | P95 (ms) | Notes |
 |---|---|---|---:|---:|---|
-| `SwitchTabAll` | Tab Bar / Key | `Ctrl+1` | 0.037 | 0.084 | Zero-allocation tab switch + list render |
-| `SwitchTabAllowed` | Tab Bar / Key | `Ctrl+2` | 0.020 | 0.034 | Filter to auto-accepted apps/sites |
-| `SwitchTabBlocked` | Tab Bar / Key | `Ctrl+3` | 0.021 | 0.027 | Filter to blocked apps/sites |
-| `SwitchTabSettings` | Tab Bar / Key | `Ctrl+4` | 0.015 | 0.031 | Toggle inline settings sheet |
-| `SearchCatalog` | Toolbar Input | `Ctrl+F` | 0.006 | 0.010 | Real-time substring filter across apps & sites |
-| `RefreshCatalog` | TopBar / Key | `F5` | 0.011 | 0.018 | Rebuild catalog snapshot & update tab counts |
-| `ToggleItemBlocked` | List Row | `Enter` | 0.498 | 1.456 | 1-click Block/Allow toggle + async save |
-| `BulkBlockSelected` | Toolbar Button | `—` | 0.000 | 0.006 | Bulk-add multiple apps/sites to Blocked |
-| `BulkAllowSelected` | Toolbar Button | `—` | 0.000 | 0.004 | Bulk-remove multiple apps/sites from Blocked |
-| `AddCustomSite` | Toolbar Input | `—` | 0.324 | 0.621 | Normalize domain + add to Blocked + async save |
-| `ToggleCaptureShield` | TopBar / Tray / Key | `Ctrl+Shift+S` | 0.381 | 0.660 | Real Win32 SetWindowDisplayAffinity + readback + async save |
+| `SwitchTabAll` | Tab Bar / Key | `Ctrl+1` | 0.025 | 0.043 | Zero-allocation tab switch + list render |
+| `SwitchTabAllowed` | Tab Bar / Key | `Ctrl+2` | 0.021 | 0.038 | Filter to auto-accepted apps/sites |
+| `SwitchTabBlocked` | Tab Bar / Key | `Ctrl+3` | 0.022 | 0.025 | Filter to blocked apps/sites |
+| `SwitchTabSettings` | Tab Bar / Key | `Ctrl+4` | 0.017 | 0.021 | Toggle inline settings sheet |
+| `SearchCatalog` | Toolbar Input | `Ctrl+F` | 0.005 | 0.009 | Real-time substring filter across apps & sites |
+| `RefreshCatalog` | TopBar / Key | `F5` | 0.011 | 0.017 | Rebuild catalog snapshot & update tab counts |
+| `ToggleItemBlocked` | List Row | `Enter` | 0.158 | 0.614 | 1-click Block/Allow toggle + async save |
+| `BulkBlockSelected` | Toolbar Button | `—` | 0.001 | 0.004 | Bulk-add multiple apps/sites to Blocked |
+| `BulkAllowSelected` | Toolbar Button | `—` | 0.000 | 0.003 | Bulk-remove multiple apps/sites from Blocked |
+| `AddCustomSite` | Toolbar Input | `—` | 0.150 | 0.284 | Normalize domain + add to Blocked + async save |
+| `ToggleCaptureShield` | TopBar / Tray / Key | `Ctrl+Shift+S` | 0.109 | 0.221 | Real Win32 SetWindowDisplayAffinity + readback + async save |
 | `ToggleTaskbarShield` | Settings / Guard | `—` | 0.000 | 0.000 | Idempotent SHAppBarMessage(ABS_AUTOHIDE) state transition |
 | `VerifyCaptureNow` | TopBar / Tray / Key | `Ctrl+Shift+V` | — | — | Requires unlocked interactive desktop DC (Win32 error 6 in non-interactive runner); pixel scanner unit-tested separately |
-| `SaveSettings` | Settings Tab | `—` | 0.278 | 0.366 | Normalize + serialized async JSON write |
-| `CopyActivityLog` | Settings Tab | `—` | 6.063 | 9.943 | Copy full timestamped activity log to clipboard |
+| `SaveSettings` | Settings Tab | `—` | 0.297 | 0.593 | Normalize + serialized async JSON write |
+| `CopyActivityLog` | Settings Tab | `—` | 5.533 | 7.403 | Copy full timestamped activity log to clipboard |
 | `ClearActivityLog` | Settings Tab | `—` | 0.001 | 0.001 | Clear visible activity log entries |
-| `ToggleWindowVisibility` | Tray | `Ctrl+Shift+H` | 2.779 | 8.064 | Show/Hide ScreenShield + re-assert affinity |
-| `MinimizeToTrayOnClose` | Window Event | `Alt+F4` | 2.779 | 8.064 | Cancels FormClosing and hides to system tray |
+| `ToggleWindowVisibility` | Tray | `Ctrl+Shift+H` | 2.661 | 5.724 | Show/Hide ScreenShield + re-assert affinity |
+| `MinimizeToTrayOnClose` | Window Event | `Alt+F4` | 2.661 | 5.724 | Cancels FormClosing and hides to system tray |
 | `ExitApplication` | Tray / Window | `—` | — | — | Not timed in-loop: exits message loop; taskbar restoration verified in TaskbarShieldService tests |
-| `GlobalHotkeyToggle` | Win32 WM_HOTKEY | `Ctrl+Shift+H` | 2.608 | 6.435 | WM_HOTKEY invokes ToggleWindowVisibility |
-| `NativeGuardEvaluate` | Background Timer | `—` | 0.001 | 0.002 | Pure guard evaluation across apps + browser sites |
+| `GlobalHotkeyToggle` | Win32 WM_HOTKEY | `Ctrl+Shift+H` | 2.792 | 4.175 | WM_HOTKEY invokes ToggleWindowVisibility |
+| `NativeGuardEvaluate` | Background Timer | `—` | 0.001 | 0.004 | Pure guard evaluation across apps + browser sites |
 | `NativeGuardMinimizeApp` | Guard Action | `—` | 0.000 | 0.000 | Win32 ShowWindow(SW_MINIMIZE) guard path |
 | `NativeGuardMoveToSecondary` | Guard Action | `—` | 0.000 | 0.000 | Win32 IsZoomed + SW_RESTORE + SetWindowPos guard path |
-| `NativeGuardPauseUpwork` | Guard Action | `—` | 0.000 | 0.001 | UI Automation Upwork Stop/Pause lookup |
+| `NativeGuardPauseUpwork` | Guard Action | `—` | 0.000 | 0.000 | UI Automation Upwork Stop/Pause lookup |
 | `AffinityWatchdogCheck` | Timer | `—` | 0.000 | 0.000 | Real Win32 GetWindowDisplayAffinity readback |
-| `SystemThemeSync` | System Event | `—` | 0.230 | 0.611 | Switch full Light/Dark palette + Win11 DWM chrome |
+| `SystemThemeSync` | System Event | `—` | 0.296 | 0.885 | Switch full Light/Dark palette + Win11 DWM chrome |
 | `CliSelfTest` | CLI Flag | `—` | 0.000 | 0.000 | CLI verdict computation; live BitBlt requires unlocked desktop |

@@ -36,12 +36,18 @@ public sealed class MainForm : Form
 
     private bool _forceExit;
     private bool _hotkeyRegistered;
+    private bool _isDraggingOrResizing;
     private int _guardInFlight;
     private int _refreshInFlight;
     private bool _suppressSettingsEvents;
     private readonly bool _autoRefreshOnShow;
     private readonly Icon _shieldIcon;
     private readonly Font _headerColumnFont = DesignTokens.CreateUiFont(8.75f, semibold: true);
+    private IntPtr _foregroundHook;
+    private IntPtr _minimizeEndHook;
+    private readonly Win32Interop.WinEventDelegate _winEventCallback;
+    private CancellationTokenSource? _saveDebounceCts;
+    private FormWindowState _lastWindowState = FormWindowState.Normal;
 
     // Header & Tabs
     private readonly TableLayoutPanel _headerBar;
@@ -90,6 +96,7 @@ public sealed class MainForm : Form
     private readonly List<HelpBadge> _helpBadges = [];
 
     private readonly ToolTip _toolTip;
+    private readonly HelpPopover _helpPopover;
     private readonly Panel _sentinelOverlay;
     private readonly NotifyIcon _trayIcon;
     private readonly System.Windows.Forms.Timer _guardTimer;
@@ -104,6 +111,8 @@ public sealed class MainForm : Form
     ];
 
     public IReadOnlyList<HelpBadge> HelpBadges => _helpBadges;
+    public HelpPopover HelpPopover => _helpPopover;
+    public void ShowHelpForBadge(HelpBadge badge) => _helpPopover.ShowFor(badge, badge.HelpText, this);
 
     public ThemePalette CurrentPalette => _palette;
     public ShieldFilterTab ActiveTab => _activeTab;
@@ -128,6 +137,7 @@ public sealed class MainForm : Form
         _guardEngine = new WindowGuardEngine();
         _palette = initialPalette ?? DesignTokens.SystemDefault();
         _autoRefreshOnShow = autoRefreshOnShow;
+        _winEventCallback = OnWinEventTriggered;
 
         Text = "ScreenShield";
         Size = new Size(1020, 680);
@@ -390,7 +400,13 @@ public sealed class MainForm : Form
                 ToggleFocusedListItem();
             }
         };
-        _listView.Resize += (_, _) => FitListColumns();
+        _listView.Resize += (_, _) =>
+        {
+            if (!_isDraggingOrResizing)
+            {
+                FitListColumns();
+            }
+        };
 
         _lblEmptyHint = new Label
         {
@@ -598,6 +614,8 @@ public sealed class MainForm : Form
             Visible = false
         };
 
+        _helpPopover = new HelpPopover();
+
         Controls.Add(_sentinelOverlay);
         Controls.Add(_catalogPage);
         Controls.Add(_settingsPage);
@@ -614,10 +632,12 @@ public sealed class MainForm : Form
         };
         _trayIcon.DoubleClick += (_, _) => ToggleWindowVisibility();
 
-        _guardTimer = new System.Windows.Forms.Timer { Interval = 2000 };
+        // Event-driven SetWinEventHook handles instant (<5ms) foreground/restore reactions;
+        // 8s timer is a lightweight fallback for silent Upwork start/stop or browser title changes.
+        _guardTimer = new System.Windows.Forms.Timer { Interval = 8000 };
         _guardTimer.Tick += (_, _) => TriggerNativeGuardSweepAsync();
 
-        _affinityWatchdog = new System.Windows.Forms.Timer { Interval = 3000 };
+        _affinityWatchdog = new System.Windows.Forms.Timer { Interval = 5000 };
         _affinityWatchdog.Tick += (_, _) => EnforceAffinityWatchdog();
 
         _screenshotWatcher.ScreenshotDetected += OnUpworkScreenshotDetected;
@@ -648,6 +668,7 @@ public sealed class MainForm : Form
 
     public void SelectTab(ShieldFilterTab tab)
     {
+        _helpPopover.HidePopover();
         _activeTab = tab;
         _tabAll.Selected = tab == ShieldFilterTab.All;
         _tabAllowed.Selected = tab == ShieldFilterTab.Allowed;
@@ -689,7 +710,7 @@ public sealed class MainForm : Form
         if (changed)
         {
             RebuildCatalogBlockedFlags();
-            _ = _settings.SaveAsync();
+            ScheduleDebouncedSave();
             AppendLog($"Blocked site: {normalized}");
         }
 
@@ -722,7 +743,7 @@ public sealed class MainForm : Form
         if (changed > 0)
         {
             RebuildCatalogBlockedFlags();
-            _ = _settings.SaveAsync();
+            ScheduleDebouncedSave();
             AppendLog(block ? $"Blocked {changed} item(s)." : $"Allowed {changed} item(s).");
         }
 
@@ -736,7 +757,7 @@ public sealed class MainForm : Form
         if (changed)
         {
             RebuildCatalogBlockedFlags();
-            _ = _settings.SaveAsync();
+            ScheduleDebouncedSave();
             AppendLog(nextBlocked ? $"Blocked {entry.DisplayName}." : $"Allowed {entry.DisplayName}.");
         }
 
@@ -804,23 +825,30 @@ public sealed class MainForm : Form
     {
         _visibleEntries = ActiveCatalogService.Filter(_allCatalogEntries, _activeTab, _txtSearch.Text);
 
+        var rows = new ListViewItem[_visibleEntries.Count];
+        for (int i = 0; i < _visibleEntries.Count; i++)
+        {
+            CatalogEntry entry = _visibleEntries[i];
+            var row = new ListViewItem(entry.DisplayName)
+            {
+                Tag = entry,
+                UseItemStyleForSubItems = false
+            };
+            row.SubItems.Add(entry.Kind == ShieldItemKind.App ? "▢ App" : "◎ Site");
+            var statusSub = row.SubItems.Add(entry.IsBlocked ? "● Blocked" : "✓ Allowed");
+            statusSub.ForeColor = entry.IsBlocked ? _palette.DangerText : _palette.ShieldActiveText;
+            var detailSub = row.SubItems.Add(entry.Detail);
+            detailSub.ForeColor = _palette.TextSub;
+            rows[i] = row;
+        }
+
         _listView.BeginUpdate();
         try
         {
             _listView.Items.Clear();
-            foreach (CatalogEntry entry in _visibleEntries)
+            if (rows.Length > 0)
             {
-                var row = new ListViewItem(entry.DisplayName)
-                {
-                    Tag = entry,
-                    UseItemStyleForSubItems = false
-                };
-                row.SubItems.Add(entry.Kind == ShieldItemKind.App ? "▢ App" : "◎ Site");
-                var statusSub = row.SubItems.Add(entry.IsBlocked ? "● Blocked" : "✓ Allowed");
-                statusSub.ForeColor = entry.IsBlocked ? _palette.DangerText : _palette.ShieldActiveText;
-                var detailSub = row.SubItems.Add(entry.Detail);
-                detailSub.ForeColor = _palette.TextSub;
-                _listView.Items.Add(row);
+                _listView.Items.AddRange(rows);
             }
         }
         finally
@@ -872,6 +900,7 @@ public sealed class MainForm : Form
         foreach (Label lbl in _settingsSubLabels) lbl.ForeColor = palette.TextSub;
         foreach (Label hdr in _settingsSectionHeaders) hdr.ForeColor = palette.TextPrimary;
         foreach (HelpBadge badge in _helpBadges) badge.ApplyTheme(palette);
+        _helpPopover.ApplyTheme(palette);
 
         _cmbAction.BackColor = palette.InputSurface;
         _cmbAction.ForeColor = palette.TextPrimary;
@@ -898,6 +927,8 @@ public sealed class MainForm : Form
         if (IsHandleCreated)
         {
             Win32Interop.ApplyWindows11Chrome(Handle, palette.IsDark, palette.BaseSurface, palette.TextPrimary);
+            Win32Interop.ApplyDarkScrollbarTheme(_listView.Handle, palette.IsDark);
+            Win32Interop.ApplyDarkScrollbarTheme(_txtLog.Handle, palette.IsDark);
         }
     }
 
@@ -933,6 +964,8 @@ public sealed class MainForm : Form
     {
         base.OnHandleCreated(e);
         Win32Interop.ApplyWindows11Chrome(Handle, _palette.IsDark, _palette.BaseSurface, _palette.TextPrimary);
+        Win32Interop.ApplyDarkScrollbarTheme(_listView.Handle, _palette.IsDark);
+        Win32Interop.ApplyDarkScrollbarTheme(_txtLog.Handle, _palette.IsDark);
         ApplyCaptureExclusionState();
         SyncGlobalHotkey();
     }
@@ -941,6 +974,7 @@ public sealed class MainForm : Form
     {
         base.OnShown(e);
         ApplyCaptureExclusionState();
+        InstallWinEventHooks();
         if (_autoRefreshOnShow)
         {
             RefreshCatalogAsync();
@@ -948,6 +982,99 @@ public sealed class MainForm : Form
 
         _guardTimer.Start();
         _affinityWatchdog.Start();
+    }
+
+    protected override void OnResizeBegin(EventArgs e)
+    {
+        _isDraggingOrResizing = true;
+        _helpPopover.HidePopover();
+        SuspendLayout();
+        base.OnResizeBegin(e);
+    }
+
+    protected override void OnResizeEnd(EventArgs e)
+    {
+        base.OnResizeEnd(e);
+        _isDraggingOrResizing = false;
+        ResumeLayout(performLayout: true);
+        FitListColumns();
+    }
+
+    protected override void OnSizeChanged(EventArgs e)
+    {
+        base.OnSizeChanged(e);
+        if (WindowState != _lastWindowState)
+        {
+            _lastWindowState = WindowState;
+            _helpPopover.HidePopover();
+            if (WindowState is FormWindowState.Maximized or FormWindowState.Normal)
+            {
+                FitListColumns();
+            }
+            else if (WindowState == FormWindowState.Minimized)
+            {
+                Win32Interop.TrimWorkingSetMemory();
+            }
+        }
+    }
+
+    private void InstallWinEventHooks()
+    {
+        if (_foregroundHook == IntPtr.Zero)
+        {
+            _foregroundHook = Win32Interop.SetWinEventHook(
+                Win32Interop.EVENT_SYSTEM_FOREGROUND,
+                Win32Interop.EVENT_SYSTEM_FOREGROUND,
+                IntPtr.Zero,
+                _winEventCallback,
+                0,
+                0,
+                Win32Interop.WINEVENT_OUTOFCONTEXT);
+        }
+
+        if (_minimizeEndHook == IntPtr.Zero)
+        {
+            _minimizeEndHook = Win32Interop.SetWinEventHook(
+                Win32Interop.EVENT_SYSTEM_MINIMIZEEND,
+                Win32Interop.EVENT_SYSTEM_MINIMIZEEND,
+                IntPtr.Zero,
+                _winEventCallback,
+                0,
+                0,
+                Win32Interop.WINEVENT_OUTOFCONTEXT);
+        }
+    }
+
+    private void UninstallWinEventHooks()
+    {
+        if (_foregroundHook != IntPtr.Zero)
+        {
+            _ = Win32Interop.UnhookWinEvent(_foregroundHook);
+            _foregroundHook = IntPtr.Zero;
+        }
+
+        if (_minimizeEndHook != IntPtr.Zero)
+        {
+            _ = Win32Interop.UnhookWinEvent(_minimizeEndHook);
+            _minimizeEndHook = IntPtr.Zero;
+        }
+    }
+
+    private void OnWinEventTriggered(
+        IntPtr hWinEventHook,
+        uint eventType,
+        IntPtr hwnd,
+        int idObject,
+        int idChild,
+        uint dwEventThread,
+        uint dwmsEventTime)
+    {
+        if (IsDisposed || _isDraggingOrResizing || hwnd == Handle)
+        {
+            return;
+        }
+
+        TriggerNativeGuardSweepAsync();
     }
 
     private void OnDrawListColumnHeader(object? sender, DrawListViewColumnHeaderEventArgs e)
@@ -994,7 +1121,9 @@ public sealed class MainForm : Form
         if (!_forceExit && _settings.MinimizeToTrayOnClose && e.CloseReason == CloseReason.UserClosing)
         {
             e.Cancel = true;
+            _helpPopover.HidePopover();
             Hide();
+            Win32Interop.TrimWorkingSetMemory();
             _trayIcon.ShowBalloonTip(
                 2000,
                 "ScreenShield is running in the tray",
@@ -1003,6 +1132,9 @@ public sealed class MainForm : Form
             return;
         }
 
+        UninstallWinEventHooks();
+        _saveDebounceCts?.Cancel();
+        _saveDebounceCts?.Dispose();
         _screenshotWatcher.ScreenshotDetected -= OnUpworkScreenshotDetected;
         _screenshotWatcher.Dispose();
         SystemEvents.UserPreferenceChanged -= OnSystemPreferenceChanged;
@@ -1014,6 +1146,7 @@ public sealed class MainForm : Form
         _taskbarShield.Dispose(); // Always restore user's original Windows taskbar setting
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
+        _helpPopover.Dispose();
         _toolTip.Dispose();
         _shieldIcon.Dispose();
         _headerColumnFont.Dispose();
@@ -1029,6 +1162,8 @@ public sealed class MainForm : Form
         bool active = _settings.ExcludeWrapperFromCapture
             && result.Success
             && result.ActualAffinity == Win32Interop.WDA_EXCLUDEFROMCAPTURE;
+
+        _helpPopover.SetCaptureExclusion(active);
 
         if (active)
         {
@@ -1059,7 +1194,7 @@ public sealed class MainForm : Form
         _chkExcludeSelf.Checked = _settings.ExcludeWrapperFromCapture;
         _suppressSettingsEvents = false;
         ApplyCaptureExclusionState();
-        _ = _settings.SaveAsync();
+        ScheduleDebouncedSave();
     }
 
     public void RefreshCatalogAsync()
@@ -1153,23 +1288,26 @@ public sealed class MainForm : Form
 
     private void TriggerNativeGuardSweepAsync()
     {
-        if (Interlocked.Exchange(ref _guardInFlight, 1) == 1) return;
+        if (_isDraggingOrResizing || Interlocked.Exchange(ref _guardInFlight, 1) == 1) return;
 
         AppSettings snap = _settings;
         _ = Task.Run(() =>
         {
             try
             {
-                IReadOnlyList<WindowSnapshot> windows = _windowInspector.GetTopLevelWindows();
-                IReadOnlyList<string> procs = _windowInspector.GetRunningProcessNames();
-                IReadOnlyList<ScreenSnapshot> screens = _windowInspector.GetScreens();
-                GuardEvaluation eval = _guardEngine.Evaluate(windows, procs, screens, snap, DateTimeOffset.UtcNow);
+                DesktopSnapshot desktop = _windowInspector.CaptureDesktopSnapshot();
+                GuardEvaluation eval = _guardEngine.Evaluate(
+                    desktop.Windows,
+                    desktop.RunningProcessNames,
+                    desktop.Screens,
+                    snap,
+                    DateTimeOffset.UtcNow);
 
                 _taskbarShield.ApplyTaskbarShield(eval.ShouldHideTaskbar);
 
                 if (!IsDisposed && IsHandleCreated)
                 {
-                    BeginInvoke(() => ApplyGuardEvaluationOnUi(eval, windows, snap));
+                    BeginInvoke(() => ApplyGuardEvaluationOnUi(eval, desktop.Windows, snap));
                 }
             }
             finally
@@ -1243,7 +1381,7 @@ public sealed class MainForm : Form
         _guardEngine.ResetCooldowns();
         ApplyCaptureExclusionState();
         SyncGlobalHotkey();
-        _ = _settings.SaveAsync();
+        ScheduleDebouncedSave();
     }
 
     public void ToggleWindowVisibility()
@@ -1343,11 +1481,34 @@ public sealed class MainForm : Form
             BackColor = Color.Transparent,
             Margin = new Padding(0, 1, 8, 2)
         };
-        var badge = new HelpBadge(helpText, _toolTip);
+        var badge = new HelpBadge(
+            helpText,
+            (b, text) => _helpPopover.ShowFor(b, text, this),
+            () => _helpPopover.HidePopover());
         _helpBadges.Add(badge);
         row.Controls.Add(control);
         row.Controls.Add(badge);
         return row;
+    }
+
+    private void ScheduleDebouncedSave()
+    {
+        _saveDebounceCts?.Cancel();
+        _saveDebounceCts?.Dispose();
+        var cts = new CancellationTokenSource();
+        _saveDebounceCts = cts;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(120, cts.Token).ConfigureAwait(false);
+                await _settings.SaveAsync().ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Coalesced by a newer save request.
+            }
+        });
     }
 
     private FlowLayoutPanel CreateLabelWithHelp(string text, string helpText)
