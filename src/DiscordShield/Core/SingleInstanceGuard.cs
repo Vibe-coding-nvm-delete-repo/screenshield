@@ -43,7 +43,16 @@ public sealed class SingleInstanceGuard : IDisposable
             WaitHandle[] handles = [_wakeEvent, _cts.Token.WaitHandle];
             while (!_cts.IsCancellationRequested)
             {
-                int signaled = WaitHandle.WaitAny(handles);
+                int signaled;
+                try
+                {
+                    signaled = WaitHandle.WaitAny(handles);
+                }
+                catch (ObjectDisposedException)
+                {
+                    break;
+                }
+
                 if (signaled == 0 && !_cts.IsCancellationRequested)
                 {
                     try { onWake(); }

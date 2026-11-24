@@ -152,6 +152,7 @@ public sealed class MainForm : Form
         MinimumSize = new Size(760, 520);
         StartPosition = FormStartPosition.CenterScreen;
         ShowInTaskbar = true;
+        if (_startMinimizedToTray) Opacity = 0;
         Font = DesignTokens.CreateUiFont(9.5f);
         KeyPreview = true;
         DoubleBuffered = true;
@@ -1017,6 +1018,7 @@ public sealed class MainForm : Form
         if (_startMinimizedToTray)
         {
             Hide();
+            Opacity = 1;
         }
     }
 
