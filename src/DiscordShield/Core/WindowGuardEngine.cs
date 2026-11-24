@@ -46,13 +46,18 @@ public interface IWindowInspector
     bool MoveWindowToScreen(IntPtr hwnd, Rectangle windowBounds, ScreenSnapshot targetScreen);
 }
 
-public sealed class Win32WindowInspector : IWindowInspector
+public sealed class Win32WindowInspector : IWindowInspector, IDisposable
 {
     private volatile IReadOnlyList<ScreenSnapshot>? _cachedScreens;
 
     public Win32WindowInspector()
     {
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
+    }
+
+    public void Dispose()
+    {
+        SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
     }
 
     private void OnDisplaySettingsChanged(object? sender, EventArgs e)

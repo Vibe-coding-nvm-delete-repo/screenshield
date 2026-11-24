@@ -1144,6 +1144,10 @@ public sealed class MainForm : Form
         _affinityWatchdog.Dispose();
         UnregisterGlobalHotkey();
         _taskbarShield.Dispose(); // Always restore user's original Windows taskbar setting
+        if (_windowInspector is IDisposable disposableInspector)
+        {
+            disposableInspector.Dispose();
+        }
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
         _helpPopover.Dispose();
