@@ -1,4 +1,4 @@
-using System.Windows.Automation;
+using DiscordShield.Native;
 
 namespace DiscordShield.Core;
 
@@ -160,23 +160,33 @@ public static class ActiveCatalogService
         ShieldFilterTab tab,
         string? searchQuery)
     {
-        IEnumerable<CatalogEntry> query = tab switch
-        {
-            ShieldFilterTab.Allowed => allEntries.Where(static e => !e.IsBlocked),
-            ShieldFilterTab.Blocked => allEntries.Where(static e => e.IsBlocked),
-            _ => allEntries
-        };
+        bool hasQuery = !string.IsNullOrWhiteSpace(searchQuery);
+        string q = hasQuery ? searchQuery!.Trim() : string.Empty;
 
-        if (!string.IsNullOrWhiteSpace(searchQuery))
+        if (tab == ShieldFilterTab.All && !hasQuery)
         {
-            string q = searchQuery.Trim();
-            query = query.Where(e =>
-                e.DisplayName.Contains(q, StringComparison.OrdinalIgnoreCase)
-                || e.Key.Contains(q, StringComparison.OrdinalIgnoreCase)
-                || e.Detail.Contains(q, StringComparison.OrdinalIgnoreCase));
+            return allEntries; // Zero-allocation fast path!
         }
 
-        return query.ToList();
+        var result = new List<CatalogEntry>(allEntries.Count);
+        for (int i = 0; i < allEntries.Count; i++)
+        {
+            CatalogEntry e = allEntries[i];
+            if (tab == ShieldFilterTab.Allowed && e.IsBlocked) continue;
+            if (tab == ShieldFilterTab.Blocked && !e.IsBlocked) continue;
+
+            if (hasQuery
+                && !e.DisplayName.Contains(q, StringComparison.OrdinalIgnoreCase)
+                && !e.Key.Contains(q, StringComparison.OrdinalIgnoreCase)
+                && !e.Detail.Contains(q, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            result.Add(e);
+        }
+
+        return result;
     }
 
     public static bool SetBlocked(AppSettings settings, ShieldItemKind kind, string key, bool block)
@@ -358,34 +368,8 @@ public static class ActiveCatalogService
             IsBlocked: isBlocked);
     }
 
-    private static IEnumerable<string> ReadBrowserTabsSafe(IntPtr hwnd)
+    private static List<string> ReadBrowserTabsSafe(IntPtr hwnd)
     {
-        var tabs = new List<string>();
-        try
-        {
-            AutomationElement? root = AutomationElement.FromHandle(hwnd);
-            if (root is null)
-            {
-                return tabs;
-            }
-
-            var tabCond = new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TabItem);
-            AutomationElementCollection found = root.FindAll(TreeScope.Descendants, tabCond);
-            int limit = Math.Min(found.Count, 40);
-            for (int i = 0; i < limit; i++)
-            {
-                string? name = found[i].Current.Name;
-                if (!string.IsNullOrWhiteSpace(name))
-                {
-                    tabs.Add(name);
-                }
-            }
-        }
-        catch
-        {
-            // Browser UIA tree can be busy or elevated; title fallback already succeeded.
-        }
-
-        return tabs;
+        return ComUiAutomation.ReadTabItemNames(hwnd, maxTabs: 40);
     }
 }

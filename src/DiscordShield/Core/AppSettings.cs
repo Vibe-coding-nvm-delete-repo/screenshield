@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 
 namespace DiscordShield.Core;
 
-[JsonConverter(typeof(JsonStringEnumConverter))]
+[JsonConverter(typeof(JsonStringEnumConverter<NativeGuardAction>))]
 public enum NativeGuardAction
 {
     AlertOnly,
@@ -13,7 +13,7 @@ public enum NativeGuardAction
     PauseUpworkAndAlert
 }
 
-[JsonConverter(typeof(JsonStringEnumConverter))]
+[JsonConverter(typeof(JsonStringEnumConverter<ShieldItemKind>))]
 public enum ShieldItemKind
 {
     App,
@@ -167,7 +167,7 @@ public sealed class AppSettings
         try
         {
             string json = File.ReadAllText(targetPath);
-            AppSettings? parsed = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions);
+            AppSettings? parsed = JsonSerializer.Deserialize(json, AppSettingsJsonContext.Default.AppSettings);
             if (parsed is null)
             {
                 return (new AppSettings().Normalize(), "Settings file was empty; restored defaults.");
@@ -193,7 +193,7 @@ public sealed class AppSettings
             Directory.CreateDirectory(dir);
         }
 
-        string json = JsonSerializer.Serialize(this, JsonOptions);
+        string json = JsonSerializer.Serialize(this, AppSettingsJsonContext.Default.AppSettings);
         File.WriteAllText(targetPath, json);
     }
 
@@ -201,7 +201,7 @@ public sealed class AppSettings
     {
         Normalize();
         string targetPath = path ?? DefaultSettingsPath;
-        string json = JsonSerializer.Serialize(this, JsonOptions);
+        string json = JsonSerializer.Serialize(this, AppSettingsJsonContext.Default.AppSettings);
 
         await SaveLock.WaitAsync().ConfigureAwait(false);
         try
@@ -219,10 +219,10 @@ public sealed class AppSettings
             SaveLock.Release();
         }
     }
+}
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNameCaseInsensitive = true
-    };
+[JsonSourceGenerationOptions(WriteIndented = true, PropertyNameCaseInsensitive = true)]
+[JsonSerializable(typeof(AppSettings))]
+internal sealed partial class AppSettingsJsonContext : JsonSerializerContext
+{
 }

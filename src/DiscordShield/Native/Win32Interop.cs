@@ -1,5 +1,5 @@
+using System.Buffers;
 using System.Runtime.InteropServices;
-using System.Text;
 
 namespace DiscordShield.Native;
 
@@ -228,7 +228,7 @@ public static class Win32Interop
     }
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+    public static extern int GetWindowText(IntPtr hWnd, [Out] char[] lpString, int nMaxCount);
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern int GetWindowTextLength(IntPtr hWnd);
@@ -294,8 +294,15 @@ public static class Win32Interop
             return string.Empty;
         }
 
-        var sb = new StringBuilder(length + 1);
-        _ = GetWindowText(hWnd, sb, sb.Capacity);
-        return sb.ToString();
+        char[] rented = ArrayPool<char>.Shared.Rent(length + 1);
+        try
+        {
+            int copied = GetWindowText(hWnd, rented, length + 1);
+            return copied > 0 ? new string(rented, 0, copied) : string.Empty;
+        }
+        finally
+        {
+            ArrayPool<char>.Shared.Return(rented);
+        }
     }
 }

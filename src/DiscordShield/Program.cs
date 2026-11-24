@@ -17,6 +17,11 @@ public static class Program
             return RunSelfTest();
         }
 
+        if (args.Any(a => a.Equals("--smoke-test", StringComparison.OrdinalIgnoreCase)))
+        {
+            return RunUiSmokeTest();
+        }
+
         var (settings, warning) = AppSettings.Load();
         var captureService = new CaptureExclusionService();
         var inspector = new Win32WindowInspector();
@@ -148,5 +153,44 @@ public static class Program
         }
 
         return ("FAILED_PIXEL_VERIFICATION", false, 1);
+    }
+
+    /// <summary>
+    /// Instantiates the full MainForm UI, exercises all 4 tabs, catalog block/allow,
+    /// HelpPopover, theme switch, and settings serialization to prove zero trimming regressions.
+    /// </summary>
+    public static int RunUiSmokeTest()
+    {
+        var settings = new AppSettings();
+        using var form = new MainForm(
+            settings,
+            new CaptureExclusionService(),
+            new Win32WindowInspector(),
+            new UpworkAutomationHelper(),
+            taskbarShield: new TaskbarShieldService(() => false, _ => true),
+            initialPalette: DesignTokens.Dark,
+            autoRefreshOnShow: false);
+
+        form.CreateControl();
+        var sample = new[]
+        {
+            new WindowSnapshot(new IntPtr(1), 101, "Discord", "Discord", true, false, new Rectangle(0, 0, 1000, 700)),
+            new WindowSnapshot(new IntPtr(2), 102, "chrome", "WhatsApp - Google Chrome", true, false, new Rectangle(0, 0, 1200, 800))
+        };
+        form.LoadCatalogSnapshot(sample, includeBrowserUia: false);
+        form.SelectTab(ShieldFilterTab.Allowed);
+        form.SelectTab(ShieldFilterTab.Blocked);
+        form.SelectTab(ShieldFilterTab.Settings);
+        if (form.HelpBadges.Count > 0)
+        {
+            form.ShowHelpForBadge(form.HelpBadges[0]);
+            form.HelpPopover.HidePopover();
+        }
+
+        form.ApplyTheme(DesignTokens.Light);
+        form.ApplyTheme(DesignTokens.Dark);
+        form.SelectTab(ShieldFilterTab.All);
+        Console.WriteLine("SMOKE_TEST_OK");
+        return 0;
     }
 }

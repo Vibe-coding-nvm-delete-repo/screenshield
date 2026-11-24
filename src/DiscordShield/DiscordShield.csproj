@@ -6,13 +6,15 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWindowsForms>true</UseWindowsForms>
-    <UseWPF>true</UseWPF>
     <AssemblyName>ScreenShield</AssemblyName>
     <RootNamespace>DiscordShield</RootNamespace>
     <ApplicationIcon>Assets\screenshield.ico</ApplicationIcon>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <PublishReadyToRun>false</PublishReadyToRun>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <TieredPGO>true</TieredPGO>
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
     <Version>2.1.0</Version>
