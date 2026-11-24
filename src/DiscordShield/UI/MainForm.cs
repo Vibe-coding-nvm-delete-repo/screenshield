@@ -62,16 +62,18 @@ public sealed class MainForm : Form
         _topBar = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
-            Height = 46,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            MinimumSize = new Size(0, 52),
             ColumnCount = 3,
             RowCount = 1,
             BackColor = Color.FromArgb(43, 45, 49),
             Padding = new Padding(12, 8, 12, 8)
         };
-        _topBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 52f));
-        _topBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 48f));
+        _topBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60f));
+        _topBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40f));
         _topBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        _topBar.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        _topBar.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         _lblShieldStatus = new Label
         {
@@ -95,25 +97,25 @@ public sealed class MainForm : Form
 
         var rightButtons = new FlowLayoutPanel
         {
-            Dock = DockStyle.Fill,
             AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
             BackColor = Color.Transparent,
             Padding = new Padding(0),
-            Margin = new Padding(0)
+            Margin = new Padding(8, 0, 0, 0)
         };
 
-        _btnToggleShield = CreateBarButton("Shield: ON", Color.FromArgb(35, 165, 90), 96);
+        _btnToggleShield = CreateBarButton("Shield: ON", Color.FromArgb(35, 165, 90));
         _btnToggleShield.Click += (_, _) => ToggleCaptureExclusion();
 
-        _btnVerify = CreateBarButton("Verify Now", Color.FromArgb(88, 101, 242), 96);
+        _btnVerify = CreateBarButton("Verify Now", Color.FromArgb(88, 101, 242));
         _btnVerify.Click += async (_, _) => await RunLiveCaptureVerificationAsync();
 
-        _btnLog = CreateBarButton("Log", Color.FromArgb(78, 80, 88), 58);
+        _btnLog = CreateBarButton("Log", Color.FromArgb(78, 80, 88));
         _btnLog.Click += (_, _) => ToggleLogPanel();
 
-        _btnSettings = CreateBarButton("Settings", Color.FromArgb(78, 80, 88), 80);
+        _btnSettings = CreateBarButton("Settings", Color.FromArgb(78, 80, 88));
         _btnSettings.Click += (_, _) => OpenSettings();
 
         rightButtons.Controls.Add(_btnToggleShield);
@@ -175,18 +177,20 @@ public sealed class MainForm : Form
         _affinityWatchdog.Tick += (_, _) => EnforceAffinityWatchdog();
     }
 
-    private static Button CreateBarButton(string text, Color backColor, int width)
+    private static Button CreateBarButton(string text, Color backColor)
     {
         var btn = new Button
         {
             Text = text,
-            Size = new Size(width, 28),
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Padding = new Padding(10, 4, 10, 4),
             Margin = new Padding(6, 0, 0, 0),
             FlatStyle = FlatStyle.Flat,
             BackColor = backColor,
             ForeColor = Color.White,
             Cursor = Cursors.Hand,
-            Font = new Font("Segoe UI Semibold", 8.75f)
+            Font = new Font("Segoe UI Semibold", 9f)
         };
         btn.FlatAppearance.BorderSize = 0;
         return btn;
