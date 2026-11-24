@@ -1007,7 +1007,9 @@ public sealed class MainForm : Form
         _screenshotWatcher.Dispose();
         SystemEvents.UserPreferenceChanged -= OnSystemPreferenceChanged;
         _guardTimer.Stop();
+        _guardTimer.Dispose();
         _affinityWatchdog.Stop();
+        _affinityWatchdog.Dispose();
         UnregisterGlobalHotkey();
         _taskbarShield.Dispose(); // Always restore user's original Windows taskbar setting
         _trayIcon.Visible = false;
