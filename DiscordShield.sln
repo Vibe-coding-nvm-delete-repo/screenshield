@@ -1,0 +1,36 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{B1F9BF93-DEAD-45DC-A022-43B3F25D2199}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DiscordShield", "src\DiscordShield\DiscordShield.csproj", "{835D34C8-5B5E-4F4A-B338-32E4721C7A0B}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{680CCE3F-2933-4611-9AB4-DA220C38BC66}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DiscordShield.Tests", "tests\DiscordShield.Tests\DiscordShield.Tests.csproj", "{312A714E-BBEC-45B6-B112-64D893C8AF33}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{835D34C8-5B5E-4F4A-B338-32E4721C7A0B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{835D34C8-5B5E-4F4A-B338-32E4721C7A0B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{835D34C8-5B5E-4F4A-B338-32E4721C7A0B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{835D34C8-5B5E-4F4A-B338-32E4721C7A0B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{312A714E-BBEC-45B6-B112-64D893C8AF33}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{312A714E-BBEC-45B6-B112-64D893C8AF33}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{312A714E-BBEC-45B6-B112-64D893C8AF33}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{312A714E-BBEC-45B6-B112-64D893C8AF33}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{835D34C8-5B5E-4F4A-B338-32E4721C7A0B} = {B1F9BF93-DEAD-45DC-A022-43B3F25D2199}
+		{312A714E-BBEC-45B6-B112-64D893C8AF33} = {680CCE3F-2933-4611-9AB4-DA220C38BC66}
+	EndGlobalSection
+EndGlobal
