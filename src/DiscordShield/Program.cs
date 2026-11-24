@@ -22,13 +22,38 @@ public static class Program
             return RunUiSmokeTest();
         }
 
+        using var singleInstance = new SingleInstanceGuard();
+        if (!singleInstance.IsPrimaryInstance)
+        {
+            singleInstance.SignalExistingInstance();
+            return 0;
+        }
+
+        bool startMinimized = args.Any(a => a.Equals("--minimized", StringComparison.OrdinalIgnoreCase));
         var (settings, warning) = AppSettings.Load();
         var captureService = new CaptureExclusionService();
-        var inspector = new Win32WindowInspector();
+        using var inspector = new Win32WindowInspector();
         var upworkAutomation = new UpworkAutomationHelper();
         var taskbarShield = new TaskbarShieldService();
+        var startupService = new StartupRegistrationService();
 
-        using var form = new MainForm(settings, captureService, inspector, upworkAutomation, taskbarShield);
+        using var form = new MainForm(
+            settings,
+            captureService,
+            inspector,
+            upworkAutomation,
+            taskbarShield,
+            startupService: startupService,
+            startMinimizedToTray: startMinimized);
+
+        singleInstance.StartListeningForWake(() =>
+        {
+            if (!form.IsDisposed && form.IsHandleCreated)
+            {
+                form.BeginInvoke(form.InstantShowFromTray);
+            }
+        });
+
         if (!string.IsNullOrWhiteSpace(warning))
         {
             MessageBox.Show(warning, "ScreenShield Settings", MessageBoxButtons.OK, MessageBoxIcon.Warning);

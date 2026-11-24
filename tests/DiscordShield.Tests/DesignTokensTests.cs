@@ -76,8 +76,8 @@ public sealed class DesignTokensTests
                     Assert.True(ctrl.TabStop, $"{ctrl.Text} must be keyboard focusable (TabStop=true).");
                 }
 
-                // Verify all 9 settings have (?) HelpBadges with plain-English text and >= 24x24 hit targets
-                Assert.Equal(9, form.HelpBadges.Count);
+                // Verify all 10 settings have (?) HelpBadges with plain-English text and >= 24x24 hit targets
+                Assert.Equal(10, form.HelpBadges.Count);
                 foreach (HelpBadge badge in form.HelpBadges)
                 {
                     Assert.True(badge.Width >= 24 && badge.Height >= 24, "HelpBadge must be at least 24x24px.");

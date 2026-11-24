@@ -107,6 +107,22 @@ public sealed class ActionCoverageTests
                 fakeTaskbar.ApplyTaskbarShield(tbState);
             }, "Idempotent SHAppBarMessage(ABS_AUTOHIDE) state transition");
 
+            string testRegKey = $"ScreenShield_Bench_{Guid.NewGuid():N}";
+            var testStartup = new StartupRegistrationService(testRegKey);
+            bool runAtStart = false;
+            try
+            {
+                results[AppAction.ToggleRunAtStartup] = Benchmark(AppAction.ToggleRunAtStartup, 20, () =>
+                {
+                    runAtStart = !runAtStart;
+                    _ = testStartup.SetEnabled(runAtStart, @"C:\Tools\ScreenShield.exe");
+                }, "Write/remove HKCU Run key (--minimized)");
+            }
+            finally
+            {
+                _ = testStartup.SetEnabled(false);
+            }
+
             results[AppAction.AffinityWatchdogCheck] = Benchmark(AppAction.AffinityWatchdogCheck, 100, () => _ = capture.ReadAffinity(form.Handle), "Real Win32 GetWindowDisplayAffinity readback");
 
             // SaveSettings, CopyActivityLog, ClearActivityLog
@@ -124,7 +140,7 @@ public sealed class ActionCoverageTests
             results[AppAction.ClearActivityLog] = Benchmark(AppAction.ClearActivityLog, 50, () => form.ClearActivityLog(), "Clear visible activity log entries");
 
             // Visibility, Hotkey, Tray, Exit
-            results[AppAction.ToggleWindowVisibility] = Benchmark(AppAction.ToggleWindowVisibility, 20, () => form.ToggleWindowVisibility(), "Show/Hide ScreenShield + re-assert affinity");
+            results[AppAction.ToggleWindowVisibility] = Benchmark(AppAction.ToggleWindowVisibility, 20, () => form.ToggleWindowVisibility(), "Instant single-click show/hide via ShowWindow + SetForegroundWindow");
             results[AppAction.GlobalHotkeyToggle] = Benchmark(AppAction.GlobalHotkeyToggle, 20, () => form.ToggleWindowVisibility(), "WM_HOTKEY invokes ToggleWindowVisibility");
             results[AppAction.MinimizeToTrayOnClose] = new ActionTimingRow(AppAction.MinimizeToTrayOnClose, true, results[AppAction.ToggleWindowVisibility].MedianMs, results[AppAction.ToggleWindowVisibility].P95Ms, "Cancels FormClosing and hides to system tray");
             results[AppAction.ExitApplication] = new ActionTimingRow(AppAction.ExitApplication, true, null, null, "Not timed in-loop: exits message loop; taskbar restoration verified in TaskbarShieldService tests");

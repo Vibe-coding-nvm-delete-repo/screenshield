@@ -24,7 +24,9 @@ public sealed class MainForm : Form
     private readonly IUpworkAutomationHelper _upworkAutomation;
     private readonly ITaskbarShieldService _taskbarShield;
     private readonly IUpworkScreenshotWatcher _screenshotWatcher;
+    private readonly IStartupRegistrationService _startupService;
     private readonly WindowGuardEngine _guardEngine;
+    private readonly bool _startMinimizedToTray;
 
     private AppSettings _settings;
     private ThemePalette _palette;
@@ -89,6 +91,7 @@ public sealed class MainForm : Form
     private readonly NumericUpDown _numCooldown;
     private readonly CheckBox _chkMinimizeToTray;
     private readonly CheckBox _chkGlobalHotkey;
+    private readonly CheckBox _chkRunAtStartup;
     private readonly TextBox _txtLog;
     private readonly MinimalButton _btnCopyLog;
     private readonly MinimalButton _btnClearLog;
@@ -127,7 +130,9 @@ public sealed class MainForm : Form
         ITaskbarShieldService? taskbarShield = null,
         ThemePalette? initialPalette = null,
         bool autoRefreshOnShow = true,
-        IUpworkScreenshotWatcher? screenshotWatcher = null)
+        IUpworkScreenshotWatcher? screenshotWatcher = null,
+        IStartupRegistrationService? startupService = null,
+        bool startMinimizedToTray = false)
     {
         _settings = settings;
         _captureService = captureService;
@@ -135,9 +140,11 @@ public sealed class MainForm : Form
         _upworkAutomation = upworkAutomation;
         _taskbarShield = taskbarShield ?? new TaskbarShieldService();
         _screenshotWatcher = screenshotWatcher ?? new UpworkScreenshotWatcher();
+        _startupService = startupService ?? new StartupRegistrationService();
         _guardEngine = new WindowGuardEngine();
         _palette = initialPalette ?? DesignTokens.SystemDefault();
         _autoRefreshOnShow = autoRefreshOnShow;
+        _startMinimizedToTray = startMinimizedToTray;
         _winEventCallback = OnWinEventTriggered;
 
         Text = "ScreenShield";
@@ -229,7 +236,11 @@ public sealed class MainForm : Form
         };
 
         _btnRefresh = new MinimalButton("↻ Refresh", ButtonTone.Quiet);
-        _btnRefresh.Click += (_, _) => RefreshCatalogAsync();
+        _btnRefresh.Click += (_, _) =>
+        {
+            RefreshCatalogAsync();
+            TriggerNativeGuardSweepAsync();
+        };
         _toolTip.SetToolTip(_btnRefresh, "Scan active desktop apps & browser tabs (F5)");
 
         _btnVerify = new MinimalButton("✓ Verify", ButtonTone.Quiet);
@@ -552,18 +563,20 @@ public sealed class MainForm : Form
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 2,
-            RowCount = 1,
+            RowCount = 2,
             BackColor = Color.Transparent,
-            Margin = new Padding(0, 2, 0, 8)
+            Margin = new Padding(0, 2, 0, 6)
         };
         shortcutGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
         shortcutGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
 
         _chkMinimizeToTray = CreateSettingsCheckBox("Keep running in system tray when closed", _settings.MinimizeToTrayOnClose);
         _chkGlobalHotkey = CreateSettingsCheckBox("Quick show/hide shortcut (Ctrl + Shift + H)", _settings.EnableGlobalHotkey);
+        _chkRunAtStartup = CreateSettingsCheckBox("Start quietly in tray with Windows", _settings.RunAtWindowsStartup || _startupService.IsEnabled());
 
         shortcutGrid.Controls.Add(WrapWithHelp(_chkMinimizeToTray, "Clicking X hides ScreenShield into the tray by your clock instead of turning off protection."), 0, 0);
         shortcutGrid.Controls.Add(WrapWithHelp(_chkGlobalHotkey, "Press Ctrl + Shift + H from anywhere on your PC to instantly show or hide ScreenShield."), 1, 0);
+        shortcutGrid.Controls.Add(WrapWithHelp(_chkRunAtStartup, "Automatically launches ScreenShield quietly in your system tray whenever you sign into Windows so you never forget to turn protection on."), 0, 1);
         settingsLayout.Controls.Add(shortcutGrid, 0, 4);
 
         // Section 3: Full Activity Log
@@ -914,6 +927,7 @@ public sealed class MainForm : Form
         _chkOnlyWhenUpwork.ForeColor = palette.TextPrimary;
         _chkMinimizeToTray.ForeColor = palette.TextPrimary;
         _chkGlobalHotkey.ForeColor = palette.TextPrimary;
+        _chkRunAtStartup.ForeColor = palette.TextPrimary;
         foreach (Label lbl in _settingsSubLabels) lbl.ForeColor = palette.TextSub;
         foreach (Label hdr in _settingsSectionHeaders) hdr.ForeColor = palette.TextPrimary;
         foreach (HelpBadge badge in _helpBadges) badge.ApplyTheme(palette);
@@ -999,6 +1013,11 @@ public sealed class MainForm : Form
 
         _guardTimer.Start();
         _affinityWatchdog.Start();
+
+        if (_startMinimizedToTray)
+        {
+            Hide();
+        }
     }
 
     protected override void OnResizeBegin(EventArgs e)
@@ -1107,12 +1126,13 @@ public sealed class MainForm : Form
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
+        if (keyData == Keys.Escape && _helpPopover.Visible) { _helpPopover.HidePopover(); return true; }
         if (keyData == (Keys.Control | Keys.D1)) { SelectTab(ShieldFilterTab.All); return true; }
         if (keyData == (Keys.Control | Keys.D2)) { SelectTab(ShieldFilterTab.Allowed); return true; }
         if (keyData == (Keys.Control | Keys.D3)) { SelectTab(ShieldFilterTab.Blocked); return true; }
         if (keyData == (Keys.Control | Keys.D4)) { SelectTab(ShieldFilterTab.Settings); return true; }
         if (keyData == (Keys.Control | Keys.F)) { SelectTab(ShieldFilterTab.All); _txtSearch.Focus(); return true; }
-        if (keyData == Keys.F5) { RefreshCatalogAsync(); return true; }
+        if (keyData == Keys.F5) { RefreshCatalogAsync(); TriggerNativeGuardSweepAsync(); return true; }
         if (keyData == (Keys.Control | Keys.Shift | Keys.S)) { ToggleCaptureExclusion(); return true; }
         if (keyData == (Keys.Control | Keys.Shift | Keys.V)) { _ = RunLiveCaptureVerificationAsync(); return true; }
         return base.ProcessCmdKey(ref msg, keyData);
@@ -1392,7 +1412,17 @@ public sealed class MainForm : Form
         _settings.GuardCooldownSeconds = (int)_numCooldown.Value;
         _settings.MinimizeToTrayOnClose = _chkMinimizeToTray.Checked;
         _settings.EnableGlobalHotkey = _chkGlobalHotkey.Checked;
+        bool startupChanged = _settings.RunAtWindowsStartup != _chkRunAtStartup.Checked;
+        _settings.RunAtWindowsStartup = _chkRunAtStartup.Checked;
         _settings.Normalize();
+
+        if (startupChanged)
+        {
+            bool ok = _startupService.SetEnabled(_settings.RunAtWindowsStartup);
+            AppendLog(_settings.RunAtWindowsStartup
+                ? (ok ? "Enabled automatic start with Windows (tray)." : "Could not register Windows startup entry.")
+                : "Disabled automatic start with Windows.");
+        }
 
         if (!_settings.AlwaysHideTaskbarWhenBlockedOpen)
         {

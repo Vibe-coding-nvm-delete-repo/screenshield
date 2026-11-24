@@ -1,4 +1,5 @@
 using DiscordShield.Native;
+using Microsoft.Win32;
 
 namespace DiscordShield.Core;
 
@@ -28,7 +29,12 @@ public sealed class TaskbarShieldService : ITaskbarShieldService
     {
         _getState = getState ?? Win32Interop.GetTaskbarAutoHideState;
         _setState = setState ?? Win32Interop.SetTaskbarAutoHide;
+        AppDomain.CurrentDomain.ProcessExit += OnProcessExitOrSessionEnding;
+        SystemEvents.SessionEnding += OnSessionEnding;
     }
+
+    private void OnProcessExitOrSessionEnding(object? sender, EventArgs e) => RestoreOriginalState();
+    private void OnSessionEnding(object? sender, SessionEndingEventArgs e) => RestoreOriginalState();
 
     public bool IsTaskbarCurrentlyShielded => _currentlyShielded;
 
@@ -88,6 +94,8 @@ public sealed class TaskbarShieldService : ITaskbarShieldService
             return;
         }
 
+        AppDomain.CurrentDomain.ProcessExit -= OnProcessExitOrSessionEnding;
+        SystemEvents.SessionEnding -= OnSessionEnding;
         RestoreOriginalState();
         _disposed = true;
     }

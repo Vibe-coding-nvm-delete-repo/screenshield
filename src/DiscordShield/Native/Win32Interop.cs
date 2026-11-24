@@ -9,7 +9,6 @@ public static class Win32Interop
     public const uint WDA_MONITOR = 0x00000001;
     public const uint WDA_EXCLUDEFROMCAPTURE = 0x00000011;
 
-    public const int SW_SHOW = 5;
     public const int SW_MINIMIZE = 6;
     public const int SW_RESTORE = 9;
 
@@ -188,25 +187,6 @@ public static class Win32Interop
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool CloseHandle(IntPtr hObject);
-
-    [DllImport("kernel32.dll")]
-    public static extern IntPtr GetCurrentProcess();
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool SetProcessWorkingSetSize(IntPtr hProcess, nint dwMinimumWorkingSetSize, nint dwMaximumWorkingSetSize);
-
-    public static void TrimWorkingSetMemory()
-    {
-        try
-        {
-            _ = SetProcessWorkingSetSize(GetCurrentProcess(), -1, -1);
-        }
-        catch
-        {
-            // Best-effort memory trim; never fail if OS denies.
-        }
-    }
 
     public static void ApplyWindows11Chrome(IntPtr hwnd, bool isDark, Color captionColor, Color captionTextColor)
     {

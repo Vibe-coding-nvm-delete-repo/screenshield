@@ -50,6 +50,7 @@ public sealed class AppSettings
     public List<string> UpworkProcessNames { get; set; } = ["Upwork"];
     public bool MinimizeToTrayOnClose { get; set; } = true;
     public bool EnableGlobalHotkey { get; set; } = true;
+    public bool RunAtWindowsStartup { get; set; } = false;
     public int GuardCooldownSeconds { get; set; } = 15;
 
     public static string DefaultSettingsPath =>
