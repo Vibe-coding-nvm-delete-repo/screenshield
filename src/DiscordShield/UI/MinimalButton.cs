@@ -5,6 +5,7 @@ namespace DiscordShield.UI;
 public enum ButtonTone
 {
     Quiet,
+    Secondary,
     Accent,
     ShieldOn,
     ShieldOff,
@@ -184,7 +185,7 @@ public sealed class MinimalButton : Control
         g.Clear(bg);
 
         Rectangle bounds = new(2, 2, Width - 5, Height - 5);
-        int radius = _pill ? bounds.Height / 2 : DesignTokens.CornerControl;
+        int radius = _pill ? bounds.Height / 2 : 7;
 
         (Color fill, Color text) = ResolveColors();
 
@@ -193,6 +194,14 @@ public sealed class MinimalButton : Control
             using GraphicsPath path = CreateRoundedRect(bounds, radius);
             using var brush = new SolidBrush(fill);
             g.FillPath(brush, path);
+        }
+
+        if (_tone == ButtonTone.Secondary)
+        {
+            Color borderColor = _palette.IsDark ? Color.FromArgb(58, 62, 74) : Color.FromArgb(216, 222, 232);
+            using GraphicsPath borderPath = CreateRoundedRect(bounds, radius);
+            using var borderPen = new Pen(borderColor, 1f);
+            g.DrawPath(borderPen, borderPath);
         }
 
         if (_selected && _tone == ButtonTone.Quiet)
@@ -228,6 +237,12 @@ public sealed class MinimalButton : Control
     {
         return _tone switch
         {
+            ButtonTone.Secondary => (
+                _pressed ? _palette.PressedFill
+                    : _hovered ? _palette.HoverFill
+                    : (_palette.IsDark ? Color.FromArgb(38, 41, 49) : Color.FromArgb(255, 255, 255)),
+                _palette.TextPrimary),
+
             ButtonTone.Accent => (
                 _pressed ? DesignTokens.Blend(_palette.TextOnAccent, _palette.AccentFill, 0.14)
                     : _hovered ? DesignTokens.Blend(_palette.TextOnAccent, _palette.AccentFill, 0.08)

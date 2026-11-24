@@ -15,6 +15,7 @@ public sealed class HelpBadge : Control
     private readonly Font _glyphFont;
 
     public string HelpText { get; }
+    public Color SurfaceOverride { get; set; } = Color.Empty;
 
     public HelpBadge(string helpText, Action<HelpBadge, string> onShow, Action onHide)
     {
@@ -99,7 +100,8 @@ public sealed class HelpBadge : Control
     {
         Graphics g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.Clear(_palette.ContentSurface);
+        Color surface = SurfaceOverride != Color.Empty ? SurfaceOverride : _palette.ContentSurface;
+        g.Clear(surface);
 
         Rectangle circle = new(4, 4, 15, 15);
         Color fill = _hovered ? _palette.HoverFill : _palette.BaseSurface;

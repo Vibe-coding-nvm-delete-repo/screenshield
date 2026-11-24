@@ -31,7 +31,11 @@ public sealed class DesignTokensTests
             ("ShieldActiveText on ShieldActiveFill", p.ShieldActiveText, p.ShieldActiveFill),
             ("ShieldOffText on BaseSurface", p.ShieldOffText, p.BaseSurface),
             ("ShieldOffText on ShieldOffFill", p.ShieldOffText, p.ShieldOffFill),
-            ("DangerText on BaseSurface", p.DangerText, p.BaseSurface)
+            ("DangerText on BaseSurface", p.DangerText, p.BaseSurface),
+            ("TextPrimary on SurfaceCard", p.TextPrimary, p.IsDark ? Color.FromArgb(30, 32, 38) : Color.White),
+            ("TextSub on SurfaceCard", p.TextSub, p.IsDark ? Color.FromArgb(30, 32, 38) : Color.White),
+            ("ShieldActiveText on SurfaceCard", p.ShieldActiveText, p.IsDark ? Color.FromArgb(30, 32, 38) : Color.White),
+            ("DangerText on SurfaceCard", p.DangerText, p.IsDark ? Color.FromArgb(30, 32, 38) : Color.White)
         };
 
         foreach (var (name, fg, bg) in pairs)
