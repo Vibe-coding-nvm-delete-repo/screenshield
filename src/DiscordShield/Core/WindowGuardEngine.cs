@@ -141,17 +141,29 @@ public sealed class Win32WindowInspector : IWindowInspector
             return false;
         }
 
-        int targetX = targetScreen.WorkingArea.Left + Math.Max(0, (targetScreen.WorkingArea.Width - windowBounds.Width) / 2);
-        int targetY = targetScreen.WorkingArea.Top + Math.Max(0, (targetScreen.WorkingArea.Height - windowBounds.Height) / 2);
+        if (Win32Interop.IsZoomed(hwnd))
+        {
+            _ = Win32Interop.ShowWindow(hwnd, Win32Interop.SW_RESTORE);
+        }
+
+        int width = windowBounds.Width > 0
+            ? Math.Min(windowBounds.Width, targetScreen.WorkingArea.Width)
+            : Math.Min(1100, targetScreen.WorkingArea.Width);
+        int height = windowBounds.Height > 0
+            ? Math.Min(windowBounds.Height, targetScreen.WorkingArea.Height)
+            : Math.Min(750, targetScreen.WorkingArea.Height);
+
+        int targetX = targetScreen.WorkingArea.Left + Math.Max(0, (targetScreen.WorkingArea.Width - width) / 2);
+        int targetY = targetScreen.WorkingArea.Top + Math.Max(0, (targetScreen.WorkingArea.Height - height) / 2);
 
         return Win32Interop.SetWindowPos(
             hwnd,
             IntPtr.Zero,
             targetX,
             targetY,
-            0,
-            0,
-            Win32Interop.SWP_NOSIZE | Win32Interop.SWP_NOZORDER | Win32Interop.SWP_NOACTIVATE);
+            width,
+            height,
+            Win32Interop.SWP_NOZORDER | Win32Interop.SWP_NOACTIVATE);
     }
 }
 

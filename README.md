@@ -25,6 +25,7 @@ When a window has `WDA_EXCLUDEFROMCAPTURE` set:
 
 1. **Mode 1 (Recommended — Works on Single-Monitor Setups): Screenshot-Excluded Discord Window**
    - Embeds `https://discord.com/app` inside a native Microsoft Edge **WebView2** window owned by `DiscordShield.exe` (with a persistent Chromium profile at `%LocalAppData%\DiscordShield\WebView2Profile`, so login/cookies/voice settings persist).
+   - Intercepts `NewWindowRequested` so Discord popouts stay inside the shielded window (or open external links in your default browser) and never spawn an unshielded popup window; auto-grants `Microphone`, `Camera`, and `Notifications` permissions for verified `https://discord.com` origins so voice chat works smoothly.
    - Calls `SetWindowDisplayAffinity(Handle, WDA_EXCLUDEFROMCAPTURE)` on its own HWND, verifies readback via `GetWindowDisplayAffinity`, and runs a 3-second watchdog to re-assert affinity if Windows resets it after display changes.
    - Includes a **1-click `Verify Now` Live Screenshot Proof** button that briefly paints a `#FF00FF` sentinel patch inside the window, captures that exact screen region via real Windows `Graphics.CopyFromScreen` (`BitBlt`), and confirms `0` sentinel pixels leaked.
    - Includes System Tray integration (`Minimize to tray on close`) and a global toggle hotkey (`Ctrl + Shift + D`).
@@ -56,7 +57,10 @@ dotnet build
 # 2. Run all unit tests + real Windows GDI screenshot proof test
 dotnet test
 
-# 3. Run the standalone CLI live screenshot self-test (JSON output, exit 0 = proven excluded)
+# 3. Run the standalone CLI live screenshot self-test (JSON output):
+#    exit 0 = proven excluded on live desktop (0 leaked sentinel pixels)
+#    exit 2 = affinity readback verified (0x11), but desktop capture unavailable (screen locked / non-interactive)
+#    exit 1 = verification failed
 dotnet run --project src/DiscordShield/DiscordShield.csproj -- --self-test
 
 # 4. Launch the DiscordShield desktop app

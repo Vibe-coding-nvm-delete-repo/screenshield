@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using DiscordShield.Core;
 using DiscordShield.Native;
@@ -19,8 +20,9 @@ public sealed class MainForm : Form
     private AppSettings _settings;
     private bool _forceExit;
     private bool _hotkeyRegistered;
+    private readonly Icon _shieldIcon;
 
-    private readonly Panel _topBar;
+    private readonly TableLayoutPanel _topBar;
     private readonly Label _lblShieldStatus;
     private readonly Label _lblGuardStatus;
     private readonly Button _btnToggleShield;
@@ -54,20 +56,28 @@ public sealed class MainForm : Form
         BackColor = Color.FromArgb(30, 31, 34);
         ForeColor = Color.FromArgb(242, 243, 245);
         Font = new Font("Segoe UI", 9.5f);
-        Icon = CreateShieldIcon(active: true);
+        _shieldIcon = CreateShieldIcon(active: true);
+        Icon = _shieldIcon;
 
-        _topBar = new Panel
+        _topBar = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
             Height = 46,
+            ColumnCount = 3,
+            RowCount = 1,
             BackColor = Color.FromArgb(43, 45, 49),
             Padding = new Padding(12, 8, 12, 8)
         };
+        _topBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 52f));
+        _topBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 48f));
+        _topBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _topBar.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
         _lblShieldStatus = new Label
         {
-            AutoSize = true,
-            Location = new Point(12, 13),
+            Dock = DockStyle.Fill,
+            AutoEllipsis = true,
+            TextAlign = ContentAlignment.MiddleLeft,
             Font = new Font("Segoe UI Semibold", 9.5f),
             ForeColor = Color.FromArgb(35, 165, 90),
             Text = "● Initializing Shield..."
@@ -75,8 +85,9 @@ public sealed class MainForm : Form
 
         _lblGuardStatus = new Label
         {
-            AutoSize = true,
-            Location = new Point(310, 14),
+            Dock = DockStyle.Fill,
+            AutoEllipsis = true,
+            TextAlign = ContentAlignment.MiddleLeft,
             Font = new Font("Segoe UI", 9f),
             ForeColor = Color.FromArgb(181, 186, 193),
             Text = "Guard: Standby"
@@ -84,7 +95,7 @@ public sealed class MainForm : Form
 
         var rightButtons = new FlowLayoutPanel
         {
-            Dock = DockStyle.Right,
+            Dock = DockStyle.Fill,
             AutoSize = true,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
@@ -110,9 +121,9 @@ public sealed class MainForm : Form
         rightButtons.Controls.Add(_btnLog);
         rightButtons.Controls.Add(_btnSettings);
 
-        _topBar.Controls.Add(_lblShieldStatus);
-        _topBar.Controls.Add(_lblGuardStatus);
-        _topBar.Controls.Add(rightButtons);
+        _topBar.Controls.Add(_lblShieldStatus, 0, 0);
+        _topBar.Controls.Add(_lblGuardStatus, 1, 0);
+        _topBar.Controls.Add(rightButtons, 2, 0);
 
         _txtLog = new TextBox
         {
@@ -243,6 +254,7 @@ public sealed class MainForm : Form
         UnregisterGlobalHotkey();
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
+        _shieldIcon.Dispose();
         base.OnFormClosing(e);
     }
 
@@ -258,6 +270,8 @@ public sealed class MainForm : Form
             await _webView.EnsureCoreWebView2Async(env);
             _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
             _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
+            _webView.CoreWebView2.NewWindowRequested += OnWebViewNewWindowRequested;
+            _webView.CoreWebView2.PermissionRequested += OnWebViewPermissionRequested;
             _webView.CoreWebView2.Navigate(_settings.DiscordUrl);
             AppendLog($"WebView2 initialized with persistent profile at {AppSettings.DefaultWebViewProfilePath}.");
         }
@@ -509,6 +523,51 @@ public sealed class MainForm : Form
         _txtLog.AppendText(line + Environment.NewLine);
     }
 
+    private void OnWebViewNewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs e)
+    {
+        // Never allow WebView2 to spawn an unshielded top-level popup window.
+        e.Handled = true;
+        NewWindowDecision decision = WebViewPolicy.DecideNewWindow(e.Uri);
+
+        if (decision == NewWindowDecision.NavigateInPlace)
+        {
+            _webView.CoreWebView2.Navigate(e.Uri);
+            AppendLog($"[WebView2] Contained Discord popup in-place: {e.Uri}");
+        }
+        else if (decision == NewWindowDecision.OpenExternalBrowser)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo(e.Uri) { UseShellExecute = true });
+                AppendLog($"[WebView2] Opened external link in default browser: {e.Uri}");
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"[WebView2] Failed to open external link ({ex.Message}).");
+            }
+        }
+        else
+        {
+            AppendLog($"[WebView2] Blocked unsafe popup URI: {e.Uri}");
+        }
+    }
+
+    private void OnWebViewPermissionRequested(object? sender, CoreWebView2PermissionRequestedEventArgs e)
+    {
+        if (!WebViewPolicy.IsDiscordOrigin(e.Uri))
+        {
+            return;
+        }
+
+        if (e.PermissionKind is CoreWebView2PermissionKind.Microphone
+            or CoreWebView2PermissionKind.Camera
+            or CoreWebView2PermissionKind.Notifications)
+        {
+            e.State = CoreWebView2PermissionState.Allow;
+            AppendLog($"[WebView2] Granted {e.PermissionKind} permission for trusted Discord origin.");
+        }
+    }
+
     private static Icon CreateShieldIcon(bool active)
     {
         using var bmp = new Bitmap(32, 32);
@@ -533,6 +592,15 @@ public sealed class MainForm : Form
             g.DrawPolygon(pen, shield);
         }
 
-        return Icon.FromHandle(bmp.GetHicon());
+        IntPtr hIcon = bmp.GetHicon();
+        try
+        {
+            using Icon temp = Icon.FromHandle(hIcon);
+            return (Icon)temp.Clone();
+        }
+        finally
+        {
+            _ = Win32Interop.DestroyIcon(hIcon);
+        }
     }
 }

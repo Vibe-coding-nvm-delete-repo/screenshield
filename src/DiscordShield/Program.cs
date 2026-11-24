@@ -89,12 +89,17 @@ public static class Program
             && baselineCapture.SentinelPixelsFound > (baselineCapture.TotalPixelsSampled / 2);
         bool protectedHidWindow = !protectedCapture.CaptureUnavailable && protectedCapture.Passed;
 
-        bool overallPass = affinityVerified && (captureUnavailable || (baselineSawWindow && protectedHidWindow));
+        var (status, overallPass, exitCode) = ComputeSelfTestVerdict(
+            affinityVerified,
+            captureUnavailable,
+            baselineSawWindow,
+            protectedHidWindow);
 
         var report = new
         {
             osVersion = Environment.OSVersion.Version.ToString(),
             osSupported = service.IsOsSupported,
+            status,
             affinityReadbackVerified = affinityVerified,
             desktopCaptureAvailable = !captureUnavailable,
             baseline = new
@@ -117,6 +122,30 @@ public static class Program
         };
 
         Console.WriteLine(JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
-        return overallPass ? 0 : 1;
+        return exitCode;
+    }
+
+    public static (string Status, bool OverallPass, int ExitCode) ComputeSelfTestVerdict(
+        bool affinityVerified,
+        bool captureUnavailable,
+        bool baselineSawWindow,
+        bool protectedHidWindow)
+    {
+        if (!affinityVerified)
+        {
+            return ("FAILED_AFFINITY", false, 1);
+        }
+
+        if (captureUnavailable)
+        {
+            return ("INCONCLUSIVE_CAPTURE_UNAVAILABLE", false, 2);
+        }
+
+        if (baselineSawWindow && protectedHidWindow)
+        {
+            return ("PROVEN_EXCLUDED", true, 0);
+        }
+
+        return ("FAILED_PIXEL_VERIFICATION", false, 1);
     }
 }
