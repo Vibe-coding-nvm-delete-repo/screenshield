@@ -197,7 +197,8 @@ public sealed class MinimalButton : Control
 
         if (_selected && _tone == ButtonTone.Quiet)
         {
-            Rectangle pillRect = new(bounds.Left + 2, bounds.Top + (bounds.Height - 14) / 2, 3, 14);
+            int inset = Math.Min(12, bounds.Width / 4);
+            Rectangle pillRect = new(bounds.Left + inset, bounds.Bottom - 3, Math.Max(12, bounds.Width - (inset * 2)), 2);
             using GraphicsPath pillPath = CreateRoundedRect(pillRect, 1);
             using var accentBrush = new SolidBrush(_palette.AccentFill);
             g.FillPath(accentBrush, pillPath);

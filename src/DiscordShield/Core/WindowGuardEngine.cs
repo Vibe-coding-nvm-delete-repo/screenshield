@@ -281,7 +281,7 @@ public sealed class WindowGuardEngine
             {
                 NativeGuardAction.AutoMinimize => $"Auto-minimizing exposed native window '{win.ProcessName}' while Upwork protection is active.",
                 NativeGuardAction.PauseUpworkAndAlert => $"Exposed native window '{win.ProcessName}' detected — attempting to pause Upwork Time Tracker and alerting.",
-                _ => $"Warning: Native '{win.ProcessName}' window is visible to Upwork screenshots. Switch to Invisible Discord or minimize it."
+                _ => $"Blocked '{win.ProcessName}' window is visible to screenshots — minimize or close it."
             };
 
             actions.Add(new GuardActionItem(win, settings.NativeGuardAction, reason));

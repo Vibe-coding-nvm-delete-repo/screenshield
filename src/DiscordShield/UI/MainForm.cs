@@ -54,7 +54,9 @@ public sealed class MainForm : Form
     // Catalog page (shared across All / Allowed / Blocked for sub-ms tab switches)
     private readonly Panel _catalogPage;
     private readonly TextBox _txtSearch;
+    private readonly Label _lblSearchPlaceholder;
     private readonly TextBox _txtAddSite;
+    private readonly Label _lblAddSitePlaceholder;
     private readonly MinimalButton _btnAddSite;
     private readonly MinimalButton _btnBulkBlock;
     private readonly MinimalButton _btnBulkAllow;
@@ -226,32 +228,57 @@ public sealed class MainForm : Form
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
+        var searchBoxWrap = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            ColumnCount = 1,
+            RowCount = 2,
+            Margin = new Padding(0, 0, 10, 0)
+        };
+        searchBoxWrap.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        _lblSearchPlaceholder = new Label
+        {
+            Text = "Search apps or websites",
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 2),
+            Font = DesignTokens.CreateUiFont(8.25f)
+        };
         _txtSearch = new TextBox
         {
             Dock = DockStyle.Fill,
-            PlaceholderText = "Search apps or websites...",
+            PlaceholderText = "Type to filter...",
             BorderStyle = BorderStyle.FixedSingle,
-            Margin = new Padding(0, 4, 10, 0)
+            Margin = new Padding(0)
         };
         _txtSearch.TextChanged += (_, _) => RenderFilteredCatalog();
+        searchBoxWrap.Controls.Add(_lblSearchPlaceholder, 0, 0);
+        searchBoxWrap.Controls.Add(_txtSearch, 0, 1);
 
         var addSitePanel = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             AutoSize = true,
             ColumnCount = 2,
-            RowCount = 1,
+            RowCount = 2,
             Margin = new Padding(0, 0, 10, 0)
         };
         addSitePanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
         addSitePanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
+        _lblAddSitePlaceholder = new Label
+        {
+            Text = "Add domain to block",
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 2),
+            Font = DesignTokens.CreateUiFont(8.25f)
+        };
         _txtAddSite = new TextBox
         {
             Dock = DockStyle.Fill,
-            PlaceholderText = "Add domain (e.g. whatsapp.com)",
+            PlaceholderText = "whatsapp.com",
             BorderStyle = BorderStyle.FixedSingle,
-            Margin = new Padding(0, 4, 6, 0)
+            Margin = new Padding(0, 2, 6, 0)
         };
         _txtAddSite.KeyDown += (_, e) =>
         {
@@ -262,19 +289,21 @@ public sealed class MainForm : Form
             }
         };
 
-        _btnAddSite = new MinimalButton("+ Block Site", ButtonTone.Quiet);
+        _btnAddSite = new MinimalButton("+ Block Site", ButtonTone.Quiet) { Anchor = AnchorStyles.Bottom };
         _btnAddSite.Click += (_, _) => AddCustomBlockedSite(_txtAddSite.Text);
 
-        addSitePanel.Controls.Add(_txtAddSite, 0, 0);
-        addSitePanel.Controls.Add(_btnAddSite, 1, 0);
+        addSitePanel.Controls.Add(_lblAddSitePlaceholder, 0, 0);
+        addSitePanel.SetColumnSpan(_lblAddSitePlaceholder, 2);
+        addSitePanel.Controls.Add(_txtAddSite, 0, 1);
+        addSitePanel.Controls.Add(_btnAddSite, 1, 1);
 
-        _btnBulkBlock = new MinimalButton("Block Selected", ButtonTone.Accent);
+        _btnBulkBlock = new MinimalButton("Block Selected", ButtonTone.Accent) { Anchor = AnchorStyles.Bottom };
         _btnBulkBlock.Click += (_, _) => BulkUpdateSelected(block: true);
 
-        _btnBulkAllow = new MinimalButton("Allow Selected", ButtonTone.Quiet);
+        _btnBulkAllow = new MinimalButton("Allow Selected", ButtonTone.Quiet) { Anchor = AnchorStyles.Bottom };
         _btnBulkAllow.Click += (_, _) => BulkUpdateSelected(block: false);
 
-        actionBar.Controls.Add(_txtSearch, 0, 0);
+        actionBar.Controls.Add(searchBoxWrap, 0, 0);
         actionBar.Controls.Add(addSitePanel, 1, 0);
         actionBar.Controls.Add(_btnBulkBlock, 2, 0);
         actionBar.Controls.Add(_btnBulkAllow, 3, 0);
@@ -325,38 +354,85 @@ public sealed class MainForm : Form
         _catalogPage.Controls.Add(_lblEmptyHint);
         _catalogPage.Controls.Add(actionBar);
 
-        // 4. Inline Settings Page
+        // 4. Inline Settings Page (compact 2-column checkbox grid — zero clipping at 980x620)
         _settingsPage = new Panel
         {
             Dock = DockStyle.Fill,
-            Padding = new Padding(24, 16, 24, 16),
-            AutoScroll = true,
+            Padding = new Padding(20, 12, 20, 12),
+            AutoScroll = false,
             Visible = false
         };
 
         var settingsLayout = new TableLayoutPanel
         {
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Dock = DockStyle.Fill,
             ColumnCount = 1,
+            RowCount = 5,
             BackColor = Color.Transparent
         };
         settingsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        settingsLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        settingsLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        settingsLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        settingsLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        settingsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
-        _chkExcludeSelf = AddSettingsCheckBox(settingsLayout, "Hide ScreenShield itself from screenshots (WDA_EXCLUDEFROMCAPTURE)", _settings.ExcludeWrapperFromCapture);
-        _chkTaskbarHide = AddSettingsCheckBox(settingsLayout, "Auto-hide Windows taskbar whenever a blocked app or site is open", _settings.AlwaysHideTaskbarWhenBlockedOpen);
-        _chkGuardEnabled = AddSettingsCheckBox(settingsLayout, "Enable live protection for blocked apps and browser sites", _settings.NativeGuardEnabled);
-        _chkOnlyWhenUpwork = AddSettingsCheckBox(settingsLayout, "Only activate protection while Upwork Time Tracker is running", _settings.OnlyActWhenUpworkRunning);
+        var toggleGrid = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 2,
+            RowCount = 3,
+            BackColor = Color.Transparent,
+            Margin = new Padding(0, 0, 0, 8)
+        };
+        toggleGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+        toggleGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
 
-        AddSettingsSubLabel(settingsLayout, "Action when a blocked app or browser site is open:");
+        _chkExcludeSelf = CreateSettingsCheckBox("Hide ScreenShield from screenshots", _settings.ExcludeWrapperFromCapture);
+        _chkTaskbarHide = CreateSettingsCheckBox("Auto-hide Windows taskbar when blocked open", _settings.AlwaysHideTaskbarWhenBlockedOpen);
+        _chkGuardEnabled = CreateSettingsCheckBox("Enable live protection for blocked apps/sites", _settings.NativeGuardEnabled);
+        _chkOnlyWhenUpwork = CreateSettingsCheckBox("Only activate while Upwork is running", _settings.OnlyActWhenUpworkRunning);
+        _chkMinimizeToTray = CreateSettingsCheckBox("Keep running in system tray when closed", _settings.MinimizeToTrayOnClose);
+        _chkGlobalHotkey = CreateSettingsCheckBox("Quick show/hide shortcut (Ctrl + Shift + H)", _settings.EnableGlobalHotkey);
+
+        toggleGrid.Controls.Add(_chkExcludeSelf, 0, 0);
+        toggleGrid.Controls.Add(_chkTaskbarHide, 1, 0);
+        toggleGrid.Controls.Add(_chkGuardEnabled, 0, 1);
+        toggleGrid.Controls.Add(_chkOnlyWhenUpwork, 1, 1);
+        toggleGrid.Controls.Add(_chkMinimizeToTray, 0, 2);
+        toggleGrid.Controls.Add(_chkGlobalHotkey, 1, 2);
+        settingsLayout.Controls.Add(toggleGrid, 0, 0);
+
+        var fieldsGrid = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 3,
+            RowCount = 2,
+            BackColor = Color.Transparent,
+            Margin = new Padding(0, 4, 0, 8)
+        };
+        fieldsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+        fieldsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 32f));
+        fieldsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 18f));
+
+        var lblAction = CreateSettingsSubLabel("Action when a blocked app or site is open:");
+        var lblUpwork = CreateSettingsSubLabel("Time tracker process:");
+        var lblCooldown = CreateSettingsSubLabel("Cooldown (sec):");
+
         _cmbAction = new ComboBox
         {
-            Width = 380,
+            Dock = DockStyle.Fill,
             DropDownStyle = ComboBoxStyle.DropDownList,
+            DrawMode = DrawMode.OwnerDrawFixed,
             FlatStyle = FlatStyle.Flat,
-            Margin = new Padding(0, 4, 0, 12)
+            ItemHeight = 22,
+            Margin = new Padding(0, 2, 12, 0)
         };
+        _cmbAction.DrawItem += OnDrawActionComboItem;
         _cmbAction.Items.AddRange(new object[]
         {
             "Warn me + hide taskbar (Recommended)",
@@ -366,49 +442,40 @@ public sealed class MainForm : Form
         });
         _cmbAction.SelectedIndex = (int)_settings.NativeGuardAction;
         _cmbAction.SelectedIndexChanged += (_, _) => OnInlineSettingsChanged();
-        settingsLayout.Controls.Add(_cmbAction);
 
-        AddSettingsSubLabel(settingsLayout, "Time tracker process names (comma-separated):");
         _txtUpworkProcs = new TextBox
         {
-            Width = 380,
+            Dock = DockStyle.Fill,
             Text = string.Join(", ", _settings.UpworkProcessNames),
             BorderStyle = BorderStyle.FixedSingle,
-            Margin = new Padding(0, 2, 0, 10)
+            Margin = new Padding(0, 2, 12, 0)
         };
         _txtUpworkProcs.TextChanged += (_, _) => OnInlineSettingsChanged();
-        settingsLayout.Controls.Add(_txtUpworkProcs);
 
-        var cooldownRow = new FlowLayoutPanel
-        {
-            AutoSize = true,
-            FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = false,
-            Margin = new Padding(0, 2, 0, 10)
-        };
-        var lblCooldown = new Label { Text = "Alert cooldown (seconds):", AutoSize = true, Padding = new Padding(0, 4, 10, 0) };
-        _settingsSubLabels.Add(lblCooldown);
         _numCooldown = new NumericUpDown
         {
-            Width = 80,
+            Dock = DockStyle.Fill,
             Minimum = 1,
             Maximum = 300,
             Value = Math.Clamp(_settings.GuardCooldownSeconds, 1, 300),
-            BorderStyle = BorderStyle.FixedSingle
+            BorderStyle = BorderStyle.FixedSingle,
+            Margin = new Padding(0, 2, 0, 0)
         };
         _numCooldown.ValueChanged += (_, _) => OnInlineSettingsChanged();
-        cooldownRow.Controls.Add(lblCooldown);
-        cooldownRow.Controls.Add(_numCooldown);
-        settingsLayout.Controls.Add(cooldownRow);
 
-        _chkMinimizeToTray = AddSettingsCheckBox(settingsLayout, "Keep running in system tray when closed", _settings.MinimizeToTrayOnClose);
-        _chkGlobalHotkey = AddSettingsCheckBox(settingsLayout, "Quick show/hide shortcut (Ctrl + Shift + H)", _settings.EnableGlobalHotkey);
+        fieldsGrid.Controls.Add(lblAction, 0, 0);
+        fieldsGrid.Controls.Add(lblUpwork, 1, 0);
+        fieldsGrid.Controls.Add(lblCooldown, 2, 0);
+        fieldsGrid.Controls.Add(_cmbAction, 0, 1);
+        fieldsGrid.Controls.Add(_txtUpworkProcs, 1, 1);
+        fieldsGrid.Controls.Add(_numCooldown, 2, 1);
+        settingsLayout.Controls.Add(fieldsGrid, 0, 1);
 
-        AddSettingsSubLabel(settingsLayout, "Activity log:");
+        settingsLayout.Controls.Add(CreateSettingsSubLabel("Activity log:"), 0, 2);
+
         _txtLog = new TextBox
         {
             Dock = DockStyle.Fill,
-            Height = 110,
             Multiline = true,
             ReadOnly = true,
             ScrollBars = ScrollBars.Vertical,
@@ -416,7 +483,7 @@ public sealed class MainForm : Form
             BorderStyle = BorderStyle.FixedSingle,
             Margin = new Padding(0, 4, 0, 0)
         };
-        settingsLayout.Controls.Add(_txtLog);
+        settingsLayout.Controls.Add(_txtLog, 0, 4);
         _settingsPage.Controls.Add(settingsLayout);
 
         _sentinelOverlay = new Panel
@@ -578,7 +645,7 @@ public sealed class MainForm : Form
         {
             bool isBlocked = e.Kind == ShieldItemKind.App
                 ? blockedApps.Contains(e.Key)
-                : blockedSites.Contains(e.Key);
+                : blockedSites.Contains(e.Key) || ActiveCatalogService.MatchesBlockedSite(e.Detail, _settings.BlockedDomains);
 
             if (!e.IsActiveNow && !isBlocked)
             {
@@ -646,7 +713,7 @@ public sealed class MainForm : Form
     private void FitListColumns()
     {
         if (_listView.Columns.Count < 4) return;
-        int fixedWidth = _listView.Columns[0].Width + _listView.Columns[1].Width + _listView.Columns[2].Width + 24;
+        int fixedWidth = _listView.Columns[0].Width + _listView.Columns[1].Width + _listView.Columns[2].Width;
         _listView.Columns[3].Width = Math.Max(180, _listView.ClientSize.Width - fixedWidth);
     }
 
@@ -668,8 +735,12 @@ public sealed class MainForm : Form
 
         _txtSearch.BackColor = palette.InputSurface;
         _txtSearch.ForeColor = palette.TextPrimary;
+        _lblSearchPlaceholder.BackColor = palette.ContentSurface;
+        _lblSearchPlaceholder.ForeColor = palette.TextSub;
         _txtAddSite.BackColor = palette.InputSurface;
         _txtAddSite.ForeColor = palette.TextPrimary;
+        _lblAddSitePlaceholder.BackColor = palette.ContentSurface;
+        _lblAddSitePlaceholder.ForeColor = palette.TextSub;
 
         _chkExcludeSelf.ForeColor = palette.TextPrimary;
         _chkTaskbarHide.ForeColor = palette.TextPrimary;
@@ -1090,30 +1161,49 @@ public sealed class MainForm : Form
         }
     }
 
-    private CheckBox AddSettingsCheckBox(TableLayoutPanel layout, string text, bool isChecked)
+    private void OnDrawActionComboItem(object? sender, DrawItemEventArgs e)
+    {
+        if (e.Index < 0 || e.Index >= _cmbAction.Items.Count) return;
+
+        bool selected = (e.State & DrawItemState.Selected) != 0 && (e.State & DrawItemState.ComboBoxEdit) == 0;
+        Color bg = selected ? _palette.SelectedFill : _palette.InputSurface;
+        using var bgBrush = new SolidBrush(bg);
+        e.Graphics.FillRectangle(bgBrush, e.Bounds);
+
+        string text = _cmbAction.Items[e.Index]?.ToString() ?? string.Empty;
+        Rectangle textRect = new(e.Bounds.Left + 6, e.Bounds.Top, Math.Max(0, e.Bounds.Width - 10), e.Bounds.Height);
+        TextRenderer.DrawText(
+            e.Graphics,
+            text,
+            _cmbAction.Font,
+            textRect,
+            _palette.TextPrimary,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
+    }
+
+    private CheckBox CreateSettingsCheckBox(string text, bool isChecked)
     {
         var chk = new CheckBox
         {
             Text = text,
             Checked = isChecked,
             AutoSize = true,
-            Margin = new Padding(0, 4, 0, 6)
+            Margin = new Padding(0, 3, 12, 5)
         };
         chk.CheckedChanged += (_, _) => OnInlineSettingsChanged();
-        layout.Controls.Add(chk);
         return chk;
     }
 
-    private void AddSettingsSubLabel(TableLayoutPanel layout, string text)
+    private Label CreateSettingsSubLabel(string text)
     {
         var lbl = new Label
         {
             Text = text,
             AutoSize = true,
-            Margin = new Padding(0, 8, 0, 2)
+            Margin = new Padding(0, 6, 0, 2)
         };
         _settingsSubLabels.Add(lbl);
-        layout.Controls.Add(lbl);
+        return lbl;
     }
 
     private void AppendLog(string message)

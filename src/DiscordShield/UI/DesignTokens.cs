@@ -27,7 +27,7 @@ public sealed record ThemePalette(
     Color FocusInner);
 
 /// <summary>
-/// Single source of truth for DiscordShield's minimalist Light & Dark themes,
+/// Single source of truth for ScreenShield's minimalist Light & Dark themes,
 /// following app-design numbers: 4px grid, 4px/8px corners, 2 layers,
 /// >= 4.5:1 WCAG contrast for every readable text/surface pair.
 /// </summary>

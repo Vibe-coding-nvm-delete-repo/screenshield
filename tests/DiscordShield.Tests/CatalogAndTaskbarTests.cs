@@ -139,4 +139,43 @@ public sealed class CatalogAndTaskbarTests
         Assert.True(osAutoHide);
         Assert.Equal(0, setCalls);
     }
+
+    [Fact]
+    public void MainForm_AddCustomBlockedSite_ImmediatelyMarksMatchingActiveBrowserRowBlocked()
+    {
+        Exception? ex = null;
+        var sta = new Thread(() =>
+        {
+            try
+            {
+                var settings = new AppSettings { ProtectedProcessNames = [], BlockedDomains = [] };
+                using var form = new DiscordShield.UI.MainForm(
+                    settings,
+                    new CaptureExclusionService(),
+                    new Win32WindowInspector(),
+                    new UpworkAutomationHelper(),
+                    taskbarShield: new TaskbarShieldService(() => false, _ => true),
+                    initialPalette: DiscordShield.UI.DesignTokens.Dark,
+                    autoRefreshOnShow: false);
+                form.CreateControl();
+
+                var windows = new[]
+                {
+                    new WindowSnapshot(new IntPtr(3), 103, "msedge", "Figma — Product Design - Microsoft Edge", true, false, new Rectangle(0, 0, 1200, 800))
+                };
+                form.LoadCatalogSnapshot(windows, includeBrowserUia: false);
+
+                Assert.Contains(form.VisibleCatalogEntries, e => e.Kind == ShieldItemKind.Site && !e.IsBlocked);
+
+                form.AddCustomBlockedSite("figma.com");
+
+                Assert.Contains(form.VisibleCatalogEntries, e => e.Kind == ShieldItemKind.Site && e.Detail.Contains("Figma") && e.IsBlocked);
+            }
+            catch (Exception e) { ex = e; }
+        });
+        sta.SetApartmentState(ApartmentState.STA);
+        sta.Start();
+        sta.Join(TimeSpan.FromSeconds(10));
+        Assert.Null(ex);
+    }
 }
