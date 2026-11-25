@@ -14,8 +14,8 @@ namespace DiscordShield.UI;
 /// </summary>
 public sealed class ShieldListControl : Control
 {
-    private const int RowHeight = 56;
-    private const int OuterPad = 6;
+    private const int RowHeight = 60;
+    private const int OuterPad = 8;
     private const int ScrollbarWidth = 6;
     private const int CheckboxZoneWidth = 42;
     private const int SwitchZoneWidth = 124;
@@ -320,11 +320,13 @@ public sealed class ShieldListControl : Control
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(_palette.BaseSurface);
 
-        Color cardFill = _palette.IsDark ? Color.FromArgb(30, 32, 38) : Color.FromArgb(255, 255, 255);
-        Color cardBorder = _palette.IsDark ? Color.FromArgb(46, 50, 60) : Color.FromArgb(226, 232, 240);
-        Rectangle outerRect = new(0, 0, Width - 1, Height - 1);
-        RoundedDraw.FillRounded(g, outerRect, 10, cardFill);
-        RoundedDraw.DrawRounded(g, outerRect, 10, cardBorder, 1f);
+        Color cardFill = _palette.IsDark ? Color.FromArgb(30, 32, 39) : Color.FromArgb(255, 255, 255);
+        Color cardBorder = _palette.IsDark ? Color.FromArgb(48, 53, 65) : Color.FromArgb(222, 228, 238);
+        Color shadowColor = _palette.IsDark ? Color.FromArgb(45, 0, 0, 0) : Color.FromArgb(16, 15, 23, 42);
+        RoundedDraw.FillRounded(g, new Rectangle(0, 1, Width - 1, Height - 2), 12, shadowColor);
+        Rectangle outerRect = new(0, 0, Width - 1, Height - 2);
+        RoundedDraw.FillRounded(g, outerRect, 12, cardFill);
+        RoundedDraw.DrawRounded(g, outerRect, 12, cardBorder, 1f);
 
         if (_items.Count == 0)
         {
@@ -422,21 +424,25 @@ public sealed class ShieldListControl : Control
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
 
             // 3. Right-side 1-click inline tactile toggle switch + status label
-            int switchW = 36;
-            int switchH = 20;
+            int switchW = 40;
+            int switchH = 22;
             int switchX = Width - rightInset - switchW - 6;
             int switchY = rowY + (RowHeight - switchH) / 2;
             Rectangle switchRect = new(switchX, switchY, switchW, switchH);
 
             Color blockedTrack = _palette.IsDark ? Color.FromArgb(239, 68, 68) : Color.FromArgb(220, 38, 38);
-            Color allowedTrack = _palette.IsDark ? Color.FromArgb(63, 67, 78) : Color.FromArgb(203, 213, 225);
+            Color allowedTrack = _palette.IsDark ? Color.FromArgb(60, 65, 78) : Color.FromArgb(203, 213, 225);
             Color trackColor = entry.IsBlocked ? blockedTrack : allowedTrack;
             if (isHover && _hoverOnSwitch) trackColor = DesignTokens.Blend(Color.White, trackColor, 0.12);
 
             RoundedDraw.FillRounded(g, switchRect, switchH / 2, trackColor);
-            int thumbSize = 14;
+            int thumbSize = 16;
             int thumbX = entry.IsBlocked ? (switchRect.Right - thumbSize - 3) : (switchRect.Left + 3);
             int thumbY = switchY + (switchH - thumbSize) / 2;
+            using (var shadowBrush = new SolidBrush(Color.FromArgb(55, 0, 0, 0)))
+            {
+                g.FillEllipse(shadowBrush, thumbX, thumbY + 1, thumbSize, thumbSize);
+            }
             using (var thumbBrush = new SolidBrush(Color.White))
             {
                 g.FillEllipse(thumbBrush, thumbX, thumbY, thumbSize, thumbSize);

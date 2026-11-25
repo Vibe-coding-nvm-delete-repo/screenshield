@@ -196,8 +196,8 @@ public sealed class MainForm : Form
         _winEventCallback = OnWinEventTriggered;
 
         Text = "ScreenShield";
-        Size = new Size(1040, 700);
-        MinimumSize = new Size(820, 560);
+        Size = new Size(1080, 740);
+        MinimumSize = new Size(860, 600);
         StartPosition = FormStartPosition.CenterScreen;
         ShowInTaskbar = true;
         if (_startMinimizedToTray) Opacity = 0;
@@ -232,10 +232,10 @@ public sealed class MainForm : Form
             Dock = DockStyle.Top,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            MinimumSize = new Size(0, 52),
+            MinimumSize = new Size(0, 58),
             ColumnCount = 5,
             RowCount = 1,
-            Padding = new Padding(18, 12, 18, 6)
+            Padding = new Padding(24, 16, 24, 8)
         };
         _headerBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _headerBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -337,22 +337,22 @@ public sealed class MainForm : Form
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
-            Padding = new Padding(16, 2, 16, 8)
+            Padding = new Padding(22, 4, 22, 12)
         };
 
-        _tabAll = new MinimalButton("⊞ All Apps & Sites", ButtonTone.Quiet) { Selected = true, Margin = new Padding(0, 0, 4, 0) };
+        _tabAll = new MinimalButton("⊞ All Apps & Sites", ButtonTone.Quiet) { Selected = true, Margin = new Padding(0, 0, 6, 0) };
         _tabAll.Click += (_, _) => SelectTab(ShieldFilterTab.All);
 
-        _tabAllowed = new MinimalButton("✓ Allowed", ButtonTone.Quiet) { Margin = new Padding(0, 0, 4, 0) };
+        _tabAllowed = new MinimalButton("✓ Allowed", ButtonTone.Quiet) { Margin = new Padding(0, 0, 6, 0) };
         _tabAllowed.Click += (_, _) => SelectTab(ShieldFilterTab.Allowed);
 
-        _tabBlocked = new MinimalButton("⊘ Blocked", ButtonTone.Quiet) { Margin = new Padding(0, 0, 4, 0) };
+        _tabBlocked = new MinimalButton("⊘ Blocked", ButtonTone.Quiet) { Margin = new Padding(0, 0, 6, 0) };
         _tabBlocked.Click += (_, _) => SelectTab(ShieldFilterTab.Blocked);
 
-        _tabHistory = new MinimalButton("⏱ History", ButtonTone.Quiet) { Margin = new Padding(0, 0, 4, 0) };
+        _tabHistory = new MinimalButton("⏱ History", ButtonTone.Quiet) { Margin = new Padding(0, 0, 6, 0) };
         _tabHistory.Click += (_, _) => SelectTab(ShieldFilterTab.History);
 
-        _tabSettings = new MinimalButton("⚙ Settings", ButtonTone.Quiet);
+        _tabSettings = new MinimalButton("⚙ Settings", ButtonTone.Quiet) { Margin = new Padding(0) };
         _tabSettings.Click += (_, _) => SelectTab(ShieldFilterTab.Settings);
 
         _tabBar.Controls.Add(_tabAll);
@@ -365,7 +365,7 @@ public sealed class MainForm : Form
         _catalogPage = new Panel
         {
             Dock = DockStyle.Fill,
-            Padding = new Padding(18, 4, 18, 14)
+            Padding = new Padding(24, 4, 24, 18)
         };
 
         var actionBar = new TableLayoutPanel
@@ -375,10 +375,10 @@ public sealed class MainForm : Form
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 5,
             RowCount = 1,
-            Padding = new Padding(0, 0, 0, 10)
+            Padding = new Padding(0, 0, 0, 14)
         };
-        actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 52f));
-        actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 48f));
+        actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+        actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -386,36 +386,38 @@ public sealed class MainForm : Form
         _txtSearch = new RoundedInput("⌕", "Search apps or websites...")
         {
             Dock = DockStyle.Fill,
-            Margin = new Padding(0, 0, 10, 0)
+            Height = 36,
+            Margin = new Padding(0, 0, 12, 0)
         };
         _txtSearch.InputTextChanged += (_, _) => RenderFilteredCatalog();
 
         _txtAddSite = new RoundedInput("+", "Add domain to block (e.g. whatsapp.com)")
         {
             Dock = DockStyle.Fill,
+            Height = 36,
             Margin = new Padding(0, 0, 8, 0)
         };
         _txtAddSite.EnterPressed += (_, _) => AddCustomBlockedSite(_txtAddSite.InputText);
 
         _btnAddSite = new MinimalButton("+ Block Site", ButtonTone.Secondary)
         {
-            Height = 34,
-            Margin = new Padding(0, 0, 10, 0),
+            Height = 36,
+            Margin = new Padding(0, 0, 12, 0),
             Anchor = AnchorStyles.Left | AnchorStyles.Right
         };
         _btnAddSite.Click += (_, _) => AddCustomBlockedSite(_txtAddSite.InputText);
 
         _btnBulkBlock = new MinimalButton("⊘ Block Selected", ButtonTone.Accent)
         {
-            Height = 34,
-            Margin = new Padding(0, 0, 6, 0),
+            Height = 36,
+            Margin = new Padding(0, 0, 8, 0),
             Anchor = AnchorStyles.Left | AnchorStyles.Right
         };
         _btnBulkBlock.Click += (_, _) => BulkUpdateSelected(block: true);
 
         _btnBulkAllow = new MinimalButton("✓ Allow Selected", ButtonTone.Secondary)
         {
-            Height = 34,
+            Height = 36,
             Margin = new Padding(0),
             Anchor = AnchorStyles.Left | AnchorStyles.Right
         };
@@ -453,7 +455,7 @@ public sealed class MainForm : Form
         _historyPage = new Panel
         {
             Dock = DockStyle.Fill,
-            Padding = new Padding(18, 4, 18, 14),
+            Padding = new Padding(24, 4, 24, 18),
             Visible = false
         };
 
@@ -464,7 +466,7 @@ public sealed class MainForm : Form
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 5,
             RowCount = 1,
-            Padding = new Padding(0, 0, 0, 10)
+            Padding = new Padding(0, 0, 0, 14)
         };
         historyBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         historyBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
@@ -475,8 +477,8 @@ public sealed class MainForm : Form
         _segHistoryFilter = new SegmentedControl(["All", "Screenshots", "Guard", "Changes"], 0)
         {
             Width = 428,
-            Height = 34,
-            Margin = new Padding(0, 0, 10, 0)
+            Height = 36,
+            Margin = new Padding(0, 0, 12, 0)
         };
         _segHistoryFilter.SelectedIndexChanged += (_, _) =>
         {
@@ -486,30 +488,30 @@ public sealed class MainForm : Form
         _txtHistorySearch = new RoundedInput("⌕", "Search history...")
         {
             Dock = DockStyle.Fill,
-            Height = 34,
-            Margin = new Padding(0, 0, 10, 0)
+            Height = 36,
+            Margin = new Padding(0, 0, 12, 0)
         };
         _txtHistorySearch.InputTextChanged += (_, _) => RenderHistoryTable();
 
         _btnExportCsv = new MinimalButton("↓ Export CSV", ButtonTone.Secondary)
         {
-            Height = 34,
-            Margin = new Padding(0, 0, 6, 0),
+            Height = 36,
+            Margin = new Padding(0, 0, 8, 0),
             Anchor = AnchorStyles.Left | AnchorStyles.Right
         };
         _btnExportCsv.Click += (_, _) => ExportHistoryCsvWithDialog();
 
         _btnCopyHistory = new MinimalButton("⧉ Copy", ButtonTone.Secondary)
         {
-            Height = 34,
-            Margin = new Padding(0, 0, 6, 0),
+            Height = 36,
+            Margin = new Padding(0, 0, 8, 0),
             Anchor = AnchorStyles.Left | AnchorStyles.Right
         };
         _btnCopyHistory.Click += (_, _) => CopyFilteredHistoryCsv();
 
         _btnClearHistory = new MinimalButton("✕ Clear", ButtonTone.Secondary)
         {
-            Height = 34,
+            Height = 36,
             Margin = new Padding(0),
             Anchor = AnchorStyles.Left | AnchorStyles.Right
         };
@@ -552,8 +554,8 @@ public sealed class MainForm : Form
         _settingsPage = new Panel
         {
             Dock = DockStyle.Fill,
-            Padding = new Padding(18, 4, 18, 14),
-            AutoScroll = false,
+            Padding = new Padding(24, 4, 24, 18),
+            AutoScroll = true,
             Visible = false
         };
 
@@ -575,7 +577,7 @@ public sealed class MainForm : Form
             Dock = DockStyle.Top,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Margin = new Padding(0, 0, 0, 7)
+            Margin = new Padding(0, 0, 0, 12)
         };
         var protectionInner = new TableLayoutPanel
         {
@@ -641,7 +643,7 @@ public sealed class MainForm : Form
             Dock = DockStyle.Top,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Margin = new Padding(0, 0, 0, 7)
+            Margin = new Padding(0, 0, 0, 12)
         };
         var behaviorInner = new TableLayoutPanel
         {
@@ -676,25 +678,25 @@ public sealed class MainForm : Form
         _segAction = new SegmentedControl(["Warn", "Minimize", "2nd Screen", "Pause"], (int)_settings.NativeGuardAction)
         {
             Dock = DockStyle.Fill,
-            Height = 32,
-            Margin = new Padding(0, 2, 12, 0)
+            Height = 36,
+            Margin = new Padding(0, 4, 14, 0)
         };
         _segAction.SelectedIndexChanged += (_, _) => OnInlineSettingsChanged();
 
         _txtUpworkProcs = new RoundedInput(string.Empty, "Upwork")
         {
             Dock = DockStyle.Fill,
-            Height = 32,
+            Height = 36,
             InputText = string.Join(", ", _settings.UpworkProcessNames),
-            Margin = new Padding(0, 2, 12, 0)
+            Margin = new Padding(0, 4, 14, 0)
         };
         _txtUpworkProcs.InputTextChanged += (_, _) => OnInlineSettingsChanged();
 
         _stepCooldown = new TactileStepper(Math.Clamp(_settings.GuardCooldownSeconds, 1, 300), 1, 300, 5, "s")
         {
             Dock = DockStyle.Fill,
-            Height = 32,
-            Margin = new Padding(0, 2, 0, 0)
+            Height = 36,
+            Margin = new Padding(0, 4, 0, 0)
         };
         _stepCooldown.ValueChanged += (_, _) => OnInlineSettingsChanged();
 

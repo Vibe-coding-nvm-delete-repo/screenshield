@@ -12,8 +12,8 @@ namespace DiscordShield.UI;
 /// </summary>
 public sealed class HistoryTableControl : Control
 {
-    private const int HeaderHeight = 34;
-    private const int RowHeight = 40;
+    private const int HeaderHeight = 38;
+    private const int RowHeight = 42;
     private const int ScrollbarWidth = 6;
     private const int ColDateWidth = 186;
     private const int ColTypeWidth = 114;
