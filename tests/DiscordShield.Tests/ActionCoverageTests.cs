@@ -38,13 +38,19 @@ public sealed class ActionCoverageTests
             var upwork = new UpworkAutomationHelper();
             var fakeTaskbar = new TaskbarShieldService(() => false, _ => true);
 
+            using var historyStore = new HistoryStore(filePath: null, loadExisting: false);
+            var fakeUpdater = new AppUpdateService(
+                fetchReleaseJson: _ => Task.FromResult("""{"tag_name":"v2.1.0","assets":[{"name":"ScreenShield-Lite.exe","browser_download_url":"https://example.com/ScreenShield-Lite.exe","digest":"sha256:0000"}]}"""));
+
             using var form = new MainForm(
                 settings,
                 capture,
                 inspector,
                 upwork,
                 taskbarShield: fakeTaskbar,
-                initialPalette: DesignTokens.Dark);
+                initialPalette: DesignTokens.Dark,
+                historyStore: historyStore,
+                updateService: fakeUpdater);
             form.CreateControl();
 
             var sampleWindows = new[]
@@ -59,7 +65,46 @@ public sealed class ActionCoverageTests
             results[AppAction.SwitchTabAll] = Benchmark(AppAction.SwitchTabAll, 60, () => form.SelectTab(ShieldFilterTab.All), "Zero-allocation tab switch + list render");
             results[AppAction.SwitchTabAllowed] = Benchmark(AppAction.SwitchTabAllowed, 60, () => form.SelectTab(ShieldFilterTab.Allowed), "Filter to auto-accepted apps/sites");
             results[AppAction.SwitchTabBlocked] = Benchmark(AppAction.SwitchTabBlocked, 60, () => form.SelectTab(ShieldFilterTab.Blocked), "Filter to blocked apps/sites");
+            results[AppAction.SwitchTabHistory] = Benchmark(AppAction.SwitchTabHistory, 60, () => form.SelectTab(ShieldFilterTab.History), "Switch to persistent sortable History table");
             results[AppAction.SwitchTabSettings] = Benchmark(AppAction.SwitchTabSettings, 60, () => form.SelectTab(ShieldFilterTab.Settings), "Toggle inline settings sheet");
+
+            // History sorting, filtering, CSV export, Snooze, and Update check
+            for (int i = 0; i < 20; i++)
+            {
+                historyStore.Record(i % 2 == 0 ? HistoryEventType.Screenshot : HistoryEventType.Guard, "Upwork", $"Sample event #{i}");
+            }
+
+            bool sortAsc = false;
+            results[AppAction.SortHistoryTable] = Benchmark(AppAction.SortHistoryTable, 60, () =>
+            {
+                sortAsc = !sortAsc;
+                form.SortHistoryBy(HistorySortColumn.Target, sortAsc);
+            }, "Sort persistent history table by column asc/desc");
+
+            int catIdx = 0;
+            results[AppAction.FilterHistoryCategory] = Benchmark(AppAction.FilterHistoryCategory, 60, () =>
+            {
+                catIdx = (catIdx + 1) % 4;
+                form.SetHistoryFilter((HistoryFilterCategory)catIdx);
+            }, "Filter history table by All/Screenshots/Guard/Changes");
+            form.SetHistoryFilter(HistoryFilterCategory.All);
+
+            results[AppAction.ExportHistoryCsv] = Benchmark(AppAction.ExportHistoryCsv, 60, () =>
+            {
+                _ = form.ExportFilteredHistoryCsv();
+            }, "Serialize filtered history rows to RFC 4180 CSV");
+
+            results[AppAction.SnoozeProtection] = Benchmark(AppAction.SnoozeProtection, 20, () =>
+            {
+                form.SnoozeProtection(TimeSpan.FromMinutes(15));
+                form.ResumeFromSnooze(expired: false);
+            }, "Timed snooze countdown + automatic re-arm");
+
+            results[AppAction.CheckForUpdates] = Benchmark(AppAction.CheckForUpdates, 20, () =>
+            {
+                _ = form.CheckForUpdatesAsync().GetAwaiter().GetResult();
+            }, "Parse GitHub v2.1.0 release digest vs running exe SHA-256");
+
             form.SelectTab(ShieldFilterTab.All);
 
             // Search & Refresh

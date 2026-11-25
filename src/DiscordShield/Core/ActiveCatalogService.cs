@@ -7,6 +7,7 @@ public enum ShieldFilterTab
     All,
     Allowed,
     Blocked,
+    History,
     Settings
 }
 

@@ -7,10 +7,12 @@ using Microsoft.Win32;
 namespace DiscordShield.UI;
 
 /// <summary>
-/// ScreenShield — Tactile, ultra-snappy 4-tab Windows privacy shield:
-///   All Apps & Sites | Allowed | Blocked | Settings
+/// ScreenShield — Tactile, ultra-snappy 5-tab Windows privacy shield:
+///   All Apps & Sites | Allowed | Blocked | History | Settings
 /// - Custom 144fps double-buffered tactile controls (zero clunky Win32 checkboxes, dropdowns, or listviews).
-/// - 1-click inline shield switches on every app/site row + bulk Block / Allow.
+/// - Persistent, sortable Change & Screenshot History table with CSV export.
+/// - Timed Snooze (15m / 30m / 1h) with live countdown & auto-resume.
+/// - In-app GitHub Release version check & hot-swap updater.
 /// - Hides ScreenShield itself via WDA_EXCLUDEFROMCAPTURE (0x11).
 /// - Auto-hides Windows taskbar via SHAppBarMessage(ABS_AUTOHIDE) when blocked items are open.
 /// </summary>
@@ -25,6 +27,9 @@ public sealed class MainForm : Form
     private readonly ITaskbarShieldService _taskbarShield;
     private readonly IUpworkScreenshotWatcher _screenshotWatcher;
     private readonly IStartupRegistrationService _startupService;
+    private readonly HistoryStore _historyStore;
+    private readonly bool _ownsHistoryStore;
+    private readonly IAppUpdateService _updateService;
     private readonly WindowGuardEngine _guardEngine;
     private readonly bool _startMinimizedToTray;
 
@@ -33,8 +38,21 @@ public sealed class MainForm : Form
     private ShieldFilterTab _activeTab = ShieldFilterTab.All;
     private IReadOnlyList<CatalogEntry> _allCatalogEntries = [];
     private IReadOnlyList<CatalogEntry> _visibleEntries = [];
+    private IReadOnlyList<HistoryEntry> _visibleHistoryEntries = [];
+    private HistoryFilterCategory _historyFilter = HistoryFilterCategory.All;
+    private HistorySortColumn _historySortBy = HistorySortColumn.Timestamp;
+    private bool _historySortAsc;
+
     private bool _lastUpworkRunning;
     private int _lastExposedCount;
+    private string _lastExposedNames = string.Empty;
+    private bool _lastTaskbarShielded;
+
+    // Timed Snooze state
+    private DateTimeOffset? _snoozeUntil;
+    private bool _excludeStateBeforeSnooze = true;
+    private readonly System.Windows.Forms.Timer _snoozeTimer;
+    private readonly ContextMenuStrip _snoozeMenu;
 
     private bool _forceExit;
     private bool _hotkeyRegistered;
@@ -56,6 +74,7 @@ public sealed class MainForm : Form
     private readonly Panel _brandLogo;
     private readonly Label _lblBrandName;
     private readonly MinimalButton _btnShieldPill;
+    private readonly MinimalButton _btnSnooze;
     private readonly Label _lblGuardStatus;
     private readonly MinimalButton _btnRefresh;
     private readonly MinimalButton _btnVerify;
@@ -65,6 +84,7 @@ public sealed class MainForm : Form
     private readonly MinimalButton _tabAll;
     private readonly MinimalButton _tabAllowed;
     private readonly MinimalButton _tabBlocked;
+    private readonly MinimalButton _tabHistory;
     private readonly MinimalButton _tabSettings;
 
     // Catalog page (shared across All / Allowed / Blocked for sub-ms tab switches)
@@ -77,11 +97,23 @@ public sealed class MainForm : Form
     private readonly ShieldListControl _shieldList;
     private readonly Label _lblEmptyHint;
 
+    // History page (persistent sortable table + filter pills + search + Export CSV)
+    private readonly Panel _historyPage;
+    private readonly SegmentedControl _segHistoryFilter;
+    private readonly RoundedInput _txtHistorySearch;
+    private readonly MinimalButton _btnExportCsv;
+    private readonly MinimalButton _btnCopyHistory;
+    private readonly MinimalButton _btnClearHistory;
+    private readonly HistoryTableControl _historyTable;
+    private readonly Label _lblHistoryHint;
+
     // Inline Settings page (3 tactile SurfaceCards)
     private readonly Panel _settingsPage;
     private readonly SurfaceCard _cardProtection;
     private readonly SurfaceCard _cardBehavior;
     private readonly SurfaceCard _cardLog;
+    private readonly Label _lblVersionBadge;
+    private readonly MinimalButton _btnCheckUpdate;
     private readonly TactileToggle _chkExcludeSelf;
     private readonly TactileToggle _chkTaskbarHide;
     private readonly TactileToggle _chkGuardEnabled;
@@ -109,10 +141,12 @@ public sealed class MainForm : Form
 
     public IReadOnlyList<Control> InteractiveControls =>
     [
-        _btnShieldPill, _btnRefresh, _btnVerify,
-        _tabAll, _tabAllowed, _tabBlocked, _tabSettings,
+        _btnShieldPill, _btnSnooze, _btnRefresh, _btnVerify,
+        _tabAll, _tabAllowed, _tabBlocked, _tabHistory, _tabSettings,
         _btnAddSite, _btnBulkBlock, _btnBulkAllow,
         _shieldList,
+        _segHistoryFilter, _btnExportCsv, _btnCopyHistory, _btnClearHistory, _historyTable,
+        _btnCheckUpdate,
         _chkExcludeSelf, _chkTaskbarHide, _chkGuardEnabled, _chkOnlyWhenUpwork,
         _segAction, _stepCooldown,
         _chkMinimizeToTray, _chkGlobalHotkey, _chkRunAtStartup,
@@ -126,6 +160,10 @@ public sealed class MainForm : Form
     public ThemePalette CurrentPalette => _palette;
     public ShieldFilterTab ActiveTab => _activeTab;
     public IReadOnlyList<CatalogEntry> VisibleCatalogEntries => _visibleEntries;
+    public IReadOnlyList<HistoryEntry> VisibleHistoryEntries => _visibleHistoryEntries;
+    public HistoryStore HistoryStore => _historyStore;
+    public bool IsSnoozed => _snoozeUntil.HasValue && _snoozeUntil.Value > DateTimeOffset.UtcNow;
+    public DateTimeOffset? SnoozeUntil => _snoozeUntil;
 
     public MainForm(
         AppSettings settings,
@@ -137,7 +175,9 @@ public sealed class MainForm : Form
         bool autoRefreshOnShow = true,
         IUpworkScreenshotWatcher? screenshotWatcher = null,
         IStartupRegistrationService? startupService = null,
-        bool startMinimizedToTray = false)
+        bool startMinimizedToTray = false,
+        HistoryStore? historyStore = null,
+        IAppUpdateService? updateService = null)
     {
         _settings = settings;
         _captureService = captureService;
@@ -146,6 +186,9 @@ public sealed class MainForm : Form
         _taskbarShield = taskbarShield ?? new TaskbarShieldService();
         _screenshotWatcher = screenshotWatcher ?? new UpworkScreenshotWatcher();
         _startupService = startupService ?? new StartupRegistrationService();
+        _ownsHistoryStore = historyStore is null;
+        _historyStore = historyStore ?? new HistoryStore(HistoryStore.DefaultHistoryPath);
+        _updateService = updateService ?? new AppUpdateService();
         _guardEngine = new WindowGuardEngine();
         _palette = initialPalette ?? DesignTokens.SystemDefault();
         _autoRefreshOnShow = autoRefreshOnShow;
@@ -154,7 +197,7 @@ public sealed class MainForm : Form
 
         Text = "ScreenShield";
         Size = new Size(1040, 700);
-        MinimumSize = new Size(800, 560);
+        MinimumSize = new Size(820, 560);
         StartPosition = FormStartPosition.CenterScreen;
         ShowInTaskbar = true;
         if (_startMinimizedToTray) Opacity = 0;
@@ -172,6 +215,17 @@ public sealed class MainForm : Form
             ShowAlways = true
         };
 
+        // Snooze dropdown menu (15m / 30m / 1h / Resume)
+        _snoozeMenu = new ContextMenuStrip();
+        _snoozeMenu.Items.Add("Snooze 15 minutes", null, (_, _) => SnoozeProtection(TimeSpan.FromMinutes(15)));
+        _snoozeMenu.Items.Add("Snooze 30 minutes", null, (_, _) => SnoozeProtection(TimeSpan.FromMinutes(30)));
+        _snoozeMenu.Items.Add("Snooze 1 hour", null, (_, _) => SnoozeProtection(TimeSpan.FromHours(1)));
+        _snoozeMenu.Items.Add(new ToolStripSeparator());
+        _snoozeMenu.Items.Add("Resume Protection Now", null, (_, _) => ResumeFromSnooze(expired: false));
+
+        _snoozeTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+        _snoozeTimer.Tick += (_, _) => OnSnoozeTick();
+
         // 1. Tactile Header Bar
         _headerBar = new TableLayoutPanel
         {
@@ -179,10 +233,11 @@ public sealed class MainForm : Form
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             MinimumSize = new Size(0, 52),
-            ColumnCount = 4,
+            ColumnCount = 5,
             RowCount = 1,
             Padding = new Padding(18, 12, 18, 6)
         };
+        _headerBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _headerBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _headerBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _headerBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
@@ -196,7 +251,7 @@ public sealed class MainForm : Form
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
             BackColor = Color.Transparent,
-            Margin = new Padding(0, 1, 14, 0)
+            Margin = new Padding(0, 1, 12, 0)
         };
         _brandLogo = new Panel
         {
@@ -217,18 +272,30 @@ public sealed class MainForm : Form
         brandPanel.Controls.Add(_brandLogo);
         brandPanel.Controls.Add(_lblBrandName);
 
-        _btnShieldPill = new MinimalButton("● Protected", ButtonTone.ShieldOn, pill: true);
-        _btnShieldPill.Click += (_, _) => ToggleCaptureExclusion();
+        _btnShieldPill = new MinimalButton("● Protected", ButtonTone.ShieldOn, pill: true) { Margin = new Padding(0, 0, 6, 0) };
+        _btnShieldPill.Click += (_, _) =>
+        {
+            if (IsSnoozed) ResumeFromSnooze(expired: false);
+            else ToggleCaptureExclusion();
+        };
         _toolTip.SetToolTip(_btnShieldPill, "Toggle screenshot exclusion on ScreenShield (Ctrl+Shift+S)");
+
+        _btnSnooze = new MinimalButton("Snooze ▾", ButtonTone.Secondary, pill: true)
+        {
+            Padding = new Padding(10, 5, 10, 5),
+            Margin = new Padding(0, 0, 2, 0)
+        };
+        _btnSnooze.Click += (_, _) => _snoozeMenu.Show(_btnSnooze, new Point(0, _btnSnooze.Height + 2));
+        _toolTip.SetToolTip(_btnSnooze, "Temporarily pause protection for 15m, 30m, or 1h with automatic re-arm");
 
         _lblGuardStatus = new Label
         {
             Dock = DockStyle.Fill,
             AutoEllipsis = true,
             TextAlign = ContentAlignment.MiddleLeft,
-            Padding = new Padding(14, 0, 10, 0),
+            Padding = new Padding(8, 0, 8, 0),
             Font = DesignTokens.CreateUiFont(8.75f),
-            Text = "Upwork off · Last SS: none yet"
+            Text = "Upwork off · Last SS: none"
         };
 
         var headerRight = new FlowLayoutPanel
@@ -258,10 +325,11 @@ public sealed class MainForm : Form
 
         _headerBar.Controls.Add(brandPanel, 0, 0);
         _headerBar.Controls.Add(_btnShieldPill, 1, 0);
-        _headerBar.Controls.Add(_lblGuardStatus, 2, 0);
-        _headerBar.Controls.Add(headerRight, 3, 0);
+        _headerBar.Controls.Add(_btnSnooze, 2, 0);
+        _headerBar.Controls.Add(_lblGuardStatus, 3, 0);
+        _headerBar.Controls.Add(headerRight, 4, 0);
 
-        // 2. 4-Tab Pill Navigation Bar
+        // 2. 5-Tab Pill Navigation Bar
         _tabBar = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
@@ -281,12 +349,16 @@ public sealed class MainForm : Form
         _tabBlocked = new MinimalButton("⊘ Blocked", ButtonTone.Quiet) { Margin = new Padding(0, 0, 4, 0) };
         _tabBlocked.Click += (_, _) => SelectTab(ShieldFilterTab.Blocked);
 
+        _tabHistory = new MinimalButton("⏱ History", ButtonTone.Quiet) { Margin = new Padding(0, 0, 4, 0) };
+        _tabHistory.Click += (_, _) => SelectTab(ShieldFilterTab.History);
+
         _tabSettings = new MinimalButton("⚙ Settings", ButtonTone.Quiet);
         _tabSettings.Click += (_, _) => SelectTab(ShieldFilterTab.Settings);
 
         _tabBar.Controls.Add(_tabAll);
         _tabBar.Controls.Add(_tabAllowed);
         _tabBar.Controls.Add(_tabBlocked);
+        _tabBar.Controls.Add(_tabHistory);
         _tabBar.Controls.Add(_tabSettings);
 
         // 3. Catalog Page (All / Allowed / Blocked)
@@ -377,7 +449,106 @@ public sealed class MainForm : Form
         _catalogPage.Controls.Add(_lblEmptyHint);
         _catalogPage.Controls.Add(actionBar);
 
-        // 4. Inline Settings Page (3 tactile SurfaceCards + 10 (?) help popovers)
+        // 4. Persistent Sortable History Page (Screenshots, Guard, Block/Allow, Settings)
+        _historyPage = new Panel
+        {
+            Dock = DockStyle.Fill,
+            Padding = new Padding(18, 4, 18, 14),
+            Visible = false
+        };
+
+        var historyBar = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 5,
+            RowCount = 1,
+            Padding = new Padding(0, 0, 0, 10)
+        };
+        historyBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        historyBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        historyBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        historyBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        historyBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        _segHistoryFilter = new SegmentedControl(["All", "Screenshots", "Guard", "Changes"], 0)
+        {
+            Width = 428,
+            Height = 34,
+            Margin = new Padding(0, 0, 10, 0)
+        };
+        _segHistoryFilter.SelectedIndexChanged += (_, _) =>
+        {
+            SetHistoryFilter((HistoryFilterCategory)_segHistoryFilter.SelectedIndex);
+        };
+
+        _txtHistorySearch = new RoundedInput("⌕", "Search history...")
+        {
+            Dock = DockStyle.Fill,
+            Height = 34,
+            Margin = new Padding(0, 0, 10, 0)
+        };
+        _txtHistorySearch.InputTextChanged += (_, _) => RenderHistoryTable();
+
+        _btnExportCsv = new MinimalButton("↓ Export CSV", ButtonTone.Secondary)
+        {
+            Height = 34,
+            Margin = new Padding(0, 0, 6, 0),
+            Anchor = AnchorStyles.Left | AnchorStyles.Right
+        };
+        _btnExportCsv.Click += (_, _) => ExportHistoryCsvWithDialog();
+
+        _btnCopyHistory = new MinimalButton("⧉ Copy", ButtonTone.Secondary)
+        {
+            Height = 34,
+            Margin = new Padding(0, 0, 6, 0),
+            Anchor = AnchorStyles.Left | AnchorStyles.Right
+        };
+        _btnCopyHistory.Click += (_, _) => CopyFilteredHistoryCsv();
+
+        _btnClearHistory = new MinimalButton("✕ Clear", ButtonTone.Secondary)
+        {
+            Height = 34,
+            Margin = new Padding(0),
+            Anchor = AnchorStyles.Left | AnchorStyles.Right
+        };
+        _btnClearHistory.Click += (_, _) => ClearHistory();
+
+        historyBar.Controls.Add(_segHistoryFilter, 0, 0);
+        historyBar.Controls.Add(_txtHistorySearch, 1, 0);
+        historyBar.Controls.Add(_btnExportCsv, 2, 0);
+        historyBar.Controls.Add(_btnCopyHistory, 3, 0);
+        historyBar.Controls.Add(_btnClearHistory, 4, 0);
+
+        _historyTable = new HistoryTableControl
+        {
+            Dock = DockStyle.Fill
+        };
+        _historyTable.SortChanged += (col, asc) =>
+        {
+            _historySortBy = col;
+            _historySortAsc = asc;
+            RenderHistoryTable();
+        };
+
+        _lblHistoryHint = new Label
+        {
+            Dock = DockStyle.Bottom,
+            AutoSize = false,
+            Height = 24,
+            AutoEllipsis = true,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Padding = new Padding(4, 4, 4, 0),
+            Font = DesignTokens.CreateUiFont(8.5f),
+            Text = "Click any column header to sort · Saved automatically to disk · Tracks screenshots, guard actions, and changes."
+        };
+
+        _historyPage.Controls.Add(_historyTable);
+        _historyPage.Controls.Add(_lblHistoryHint);
+        _historyPage.Controls.Add(historyBar);
+
+        // 5. Inline Settings Page (3 tactile SurfaceCards + Version/Update badge + 10 (?) help popovers)
         _settingsPage = new Panel
         {
             Dock = DockStyle.Fill,
@@ -398,7 +569,7 @@ public sealed class MainForm : Form
         settingsLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));     // Card 2: Behavior & Shortcuts
         settingsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));// Card 3: Activity Log
 
-        // Card 1: Protection
+        // Card 1: Protection + Version/Update bar
         _cardProtection = new SurfaceCard
         {
             Dock = DockStyle.Top,
@@ -418,9 +589,39 @@ public sealed class MainForm : Form
         protectionInner.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
         protectionInner.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
 
+        var protectionHdrRow = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 3,
+            RowCount = 1,
+            BackColor = Color.Transparent,
+            Margin = new Padding(0, 0, 0, 2)
+        };
+        protectionHdrRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        protectionHdrRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        protectionHdrRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
         Label hdrProtection = CreateSectionHeader("Protection");
-        protectionInner.Controls.Add(hdrProtection, 0, 0);
-        protectionInner.SetColumnSpan(hdrProtection, 2);
+        _lblVersionBadge = new Label
+        {
+            Text = _updateService.CurrentVersion,
+            AutoSize = true,
+            Font = DesignTokens.CreateUiFont(8.25f, semibold: true),
+            Padding = new Padding(0, 5, 8, 0),
+            Margin = new Padding(0)
+        };
+        _settingsSubLabels.Add(_lblVersionBadge);
+
+        _btnCheckUpdate = new MinimalButton("↑ Check Update", ButtonTone.Secondary) { Margin = new Padding(0) };
+        _btnCheckUpdate.Click += async (_, _) => await CheckForUpdatesInteractiveAsync();
+
+        protectionHdrRow.Controls.Add(hdrProtection, 0, 0);
+        protectionHdrRow.Controls.Add(_lblVersionBadge, 1, 0);
+        protectionHdrRow.Controls.Add(_btnCheckUpdate, 2, 0);
+        protectionInner.Controls.Add(protectionHdrRow, 0, 0);
+        protectionInner.SetColumnSpan(protectionHdrRow, 2);
 
         _chkExcludeSelf = CreateSettingsToggle("Hide ScreenShield from screenshots", _settings.ExcludeWrapperFromCapture);
         _chkTaskbarHide = CreateSettingsToggle("Auto-hide Windows taskbar", _settings.AlwaysHideTaskbarWhenBlockedOpen);
@@ -575,7 +776,7 @@ public sealed class MainForm : Form
 
         _settingsPage.Controls.Add(settingsLayout);
 
-        AppendLog("ScreenShield started · Shield active · Taskbar guard ready.");
+        RecordHistoryEvent(HistoryEventType.System, "ScreenShield", $"Started ({_updateService.CurrentVersion}) · Shield active · Taskbar guard ready.");
 
         _sentinelOverlay = new Panel
         {
@@ -589,6 +790,7 @@ public sealed class MainForm : Form
 
         Controls.Add(_sentinelOverlay);
         Controls.Add(_catalogPage);
+        Controls.Add(_historyPage);
         Controls.Add(_settingsPage);
         Controls.Add(_tabBar);
         Controls.Add(_headerBar);
@@ -626,18 +828,25 @@ public sealed class MainForm : Form
         _screenshotWatcher.ScreenshotDetected += OnUpworkScreenshotDetected;
         SystemEvents.UserPreferenceChanged += OnSystemPreferenceChanged;
         ApplyTheme(_palette);
+        UpdateHistoryTabCount();
+        RenderHistoryTable();
     }
 
     private void OnUpworkScreenshotDetected(UpworkScreenshotEvent evt)
     {
-        string tbState = _taskbarShield.IsTaskbarCurrentlyShielded ? "Taskbar hidden" : "Taskbar normal";
-        string shieldState = _settings.ExcludeWrapperFromCapture ? "Shield ACTIVE" : "Shield PAUSED";
-        string msg = $"[Upwork SS #{evt.SessionCount}] Screenshot detected at {evt.DetectedAt.LocalDateTime:HH:mm:ss} ({evt.FileName}) · {shieldState} · {tbState}";
-
         if (IsDisposed || !IsHandleCreated) return;
         BeginInvoke(() =>
         {
-            AppendLog(msg);
+            string tbState = _taskbarShield.IsTaskbarCurrentlyShielded ? "Taskbar hidden" : "Taskbar normal";
+            string shieldState = IsSnoozed
+                ? "Shield SNOOZED"
+                : (_settings.ExcludeWrapperFromCapture ? "Shield ACTIVE" : "Shield PAUSED");
+            string exposure = _lastExposedCount > 0
+                ? $"{_lastExposedCount} blocked open ({_lastExposedNames})"
+                : "0 blocked exposed";
+            string details = $"SS #{evt.SessionCount} ({evt.FileName}) · {shieldState} · {tbState} · {exposure}";
+
+            RecordHistoryEvent(HistoryEventType.Screenshot, "Upwork", details, evt.DetectedAt);
             RefreshStatusLine();
         });
     }
@@ -656,15 +865,211 @@ public sealed class MainForm : Form
         _tabAll.Selected = tab == ShieldFilterTab.All;
         _tabAllowed.Selected = tab == ShieldFilterTab.Allowed;
         _tabBlocked.Selected = tab == ShieldFilterTab.Blocked;
+        _tabHistory.Selected = tab == ShieldFilterTab.History;
         _tabSettings.Selected = tab == ShieldFilterTab.Settings;
 
+        bool isHistory = tab == ShieldFilterTab.History;
         bool isSettings = tab == ShieldFilterTab.Settings;
+        _historyPage.Visible = isHistory;
         _settingsPage.Visible = isSettings;
-        _catalogPage.Visible = !isSettings;
+        _catalogPage.Visible = !isHistory && !isSettings;
 
-        if (!isSettings)
+        if (isHistory)
+        {
+            RenderHistoryTable();
+        }
+        else if (!isSettings)
         {
             RenderFilteredCatalog();
+        }
+    }
+
+    public void SetHistoryFilter(HistoryFilterCategory category)
+    {
+        _historyFilter = category;
+        if (_segHistoryFilter.SelectedIndex != (int)category)
+        {
+            _segHistoryFilter.SelectedIndex = (int)category;
+        }
+
+        RenderHistoryTable();
+    }
+
+    public void SetHistorySearch(string query)
+    {
+        if (_txtHistorySearch.InputText != query)
+        {
+            _txtHistorySearch.InputText = query;
+        }
+        else
+        {
+            RenderHistoryTable();
+        }
+    }
+
+    public void SortHistoryBy(HistorySortColumn column, bool ascending)
+    {
+        _historySortBy = column;
+        _historySortAsc = ascending;
+        _historyTable.SetSort(column, ascending);
+        RenderHistoryTable();
+    }
+
+    public string ExportFilteredHistoryCsv() => HistoryStore.ExportCsv(_visibleHistoryEntries);
+
+    public void CopyFilteredHistoryCsv()
+    {
+        string csv = ExportFilteredHistoryCsv();
+        try { Clipboard.SetText(csv); }
+        catch { /* Ignore clipboard contention in headless tests */ }
+        AppendLog($"Copied {_visibleHistoryEntries.Count} history row(s) as CSV.");
+    }
+
+    public void ClearHistory()
+    {
+        _historyStore.Clear();
+        UpdateHistoryTabCount();
+        RenderHistoryTable();
+        AppendLog("History cleared.");
+    }
+
+    private void ExportHistoryCsvWithDialog()
+    {
+        using var sfd = new SaveFileDialog
+        {
+            Title = "Export ScreenShield History",
+            Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+            FileName = $"screenshield-history-{DateTime.Now:yyyyMMdd-HHmm}.csv"
+        };
+        if (sfd.ShowDialog(this) == DialogResult.OK)
+        {
+            File.WriteAllText(sfd.FileName, ExportFilteredHistoryCsv());
+            RecordHistoryEvent(HistoryEventType.System, "Export", $"Exported {_visibleHistoryEntries.Count} row(s) to {Path.GetFileName(sfd.FileName)}");
+        }
+    }
+
+    public void SnoozeProtection(TimeSpan duration)
+    {
+        if (duration <= TimeSpan.Zero) return;
+
+        if (!IsSnoozed)
+        {
+            _excludeStateBeforeSnooze = _settings.ExcludeWrapperFromCapture;
+        }
+
+        _snoozeUntil = DateTimeOffset.UtcNow.Add(duration);
+        _settings.ExcludeWrapperFromCapture = false;
+        _suppressSettingsEvents = true;
+        _chkExcludeSelf.Checked = false;
+        _suppressSettingsEvents = false;
+
+        _taskbarShield.RestoreOriginalState();
+        ApplyCaptureExclusionState();
+        UpdateSnoozePillText();
+        _snoozeTimer.Start();
+
+        int mins = Math.Max(1, (int)Math.Round(duration.TotalMinutes));
+        RecordHistoryEvent(HistoryEventType.Snooze, "Protection", $"Snoozed for {mins} min (auto-resumes at {_snoozeUntil.Value.LocalDateTime:HH:mm:ss})");
+    }
+
+    public void ResumeFromSnooze(bool expired = false)
+    {
+        if (!_snoozeUntil.HasValue && _settings.ExcludeWrapperFromCapture) return;
+
+        _snoozeUntil = null;
+        _snoozeTimer.Stop();
+
+        _settings.ExcludeWrapperFromCapture = _excludeStateBeforeSnooze || true;
+        _suppressSettingsEvents = true;
+        _chkExcludeSelf.Checked = _settings.ExcludeWrapperFromCapture;
+        _suppressSettingsEvents = false;
+
+        ApplyCaptureExclusionState();
+        RecordHistoryEvent(
+            HistoryEventType.Snooze,
+            "Protection",
+            expired ? "Snooze expired — Shield automatically re-armed" : "Snooze cancelled — Shield re-armed");
+    }
+
+    private void OnSnoozeTick()
+    {
+        if (!_snoozeUntil.HasValue)
+        {
+            _snoozeTimer.Stop();
+            return;
+        }
+
+        if (DateTimeOffset.UtcNow >= _snoozeUntil.Value)
+        {
+            ResumeFromSnooze(expired: true);
+            return;
+        }
+
+        UpdateSnoozePillText();
+    }
+
+    private void UpdateSnoozePillText()
+    {
+        if (!IsSnoozed || !_snoozeUntil.HasValue) return;
+        TimeSpan rem = _snoozeUntil.Value - DateTimeOffset.UtcNow;
+        if (rem < TimeSpan.Zero) rem = TimeSpan.Zero;
+        string countdown = rem.TotalHours >= 1
+            ? $"{(int)rem.TotalHours}h {rem.Minutes:D2}m"
+            : $"{rem.Minutes:D2}:{rem.Seconds:D2}";
+        _btnShieldPill.Text = $"⏸ Snoozed {countdown}";
+        _btnShieldPill.Tone = ButtonTone.ShieldOff;
+        _trayIcon.Text = $"ScreenShield — Snoozed ({countdown})";
+    }
+
+    public async Task<UpdateCheckResult> CheckForUpdatesAsync(CancellationToken ct = default)
+    {
+        UpdateCheckResult result = await _updateService.CheckForUpdateAsync(ct);
+        RecordHistoryEvent(HistoryEventType.Update, result.AssetName, result.Message);
+        return result;
+    }
+
+    private async Task CheckForUpdatesInteractiveAsync()
+    {
+        _btnCheckUpdate.Enabled = false;
+        _btnCheckUpdate.Text = "Checking...";
+        try
+        {
+            UpdateCheckResult res = await CheckForUpdatesAsync();
+            if (res.UpdateAvailable && !string.IsNullOrWhiteSpace(res.DownloadUrl))
+            {
+                DialogResult answer = MessageBox.Show(
+                    $"{res.Message}\n\nDownload and restart ScreenShield now?",
+                    "ScreenShield Update Available",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Information);
+
+                if (answer == DialogResult.Yes)
+                {
+                    _btnCheckUpdate.Text = "Updating...";
+                    bool staged = await _updateService.DownloadAndApplyUpdateAsync(res.DownloadUrl);
+                    if (staged)
+                    {
+                        RecordHistoryEvent(HistoryEventType.Update, res.AssetName, "Update downloaded — restarting ScreenShield.");
+                        _forceExit = true;
+                        Close();
+                        return;
+                    }
+
+                    MessageBox.Show("Download failed or verification did not pass. Please try again.", "ScreenShield Update", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+            else
+            {
+                MessageBox.Show(res.Message, $"ScreenShield {_updateService.CurrentVersion}", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        }
+        finally
+        {
+            if (!IsDisposed)
+            {
+                _btnCheckUpdate.Text = "↑ Check Update";
+                _btnCheckUpdate.Enabled = true;
+            }
         }
     }
 
@@ -694,7 +1099,7 @@ public sealed class MainForm : Form
         {
             RebuildCatalogBlockedFlags();
             ScheduleDebouncedSave();
-            AppendLog($"Blocked site: {normalized}");
+            RecordHistoryEvent(HistoryEventType.BlockAllow, normalized, "Added custom domain to Blocked list");
         }
 
         return changed;
@@ -717,7 +1122,12 @@ public sealed class MainForm : Form
         {
             RebuildCatalogBlockedFlags();
             ScheduleDebouncedSave();
-            AppendLog(block ? $"Blocked {changed} item(s)." : $"Allowed {changed} item(s).");
+            string summary = string.Join(", ", selected.Take(4).Select(static s => s.DisplayName));
+            if (selected.Count > 4) summary += $" (+{selected.Count - 4} more)";
+            RecordHistoryEvent(
+                HistoryEventType.BlockAllow,
+                $"{changed} item(s)",
+                block ? $"Bulk Blocked: {summary}" : $"Bulk Allowed: {summary}");
         }
 
         return changed;
@@ -731,7 +1141,10 @@ public sealed class MainForm : Form
         {
             RebuildCatalogBlockedFlags();
             ScheduleDebouncedSave();
-            AppendLog(nextBlocked ? $"Blocked {entry.DisplayName}." : $"Allowed {entry.DisplayName}.");
+            RecordHistoryEvent(
+                HistoryEventType.BlockAllow,
+                entry.DisplayName,
+                nextBlocked ? "Changed: Allowed -> Blocked" : "Changed: Blocked -> Allowed");
         }
 
         return changed;
@@ -786,10 +1199,35 @@ public sealed class MainForm : Form
         _tabBlocked.Text = $"⊘ Blocked ({blocked})";
     }
 
+    private void UpdateHistoryTabCount()
+    {
+        _tabHistory.Text = $"⏱ History ({_historyStore.Count})";
+    }
+
     private void RenderFilteredCatalog()
     {
         _visibleEntries = ActiveCatalogService.Filter(_allCatalogEntries, _activeTab, _txtSearch.InputText);
         _shieldList.SetItems(_visibleEntries);
+    }
+
+    private void RenderHistoryTable()
+    {
+        _visibleHistoryEntries = _historyStore.Query(_historyFilter, _txtHistorySearch.InputText, _historySortBy, _historySortAsc);
+        _historyTable.SetRows(_visibleHistoryEntries);
+    }
+
+    private void RecordHistoryEvent(HistoryEventType type, string target, string details, DateTimeOffset? timestamp = null)
+    {
+        _historyStore.Record(type, target, details, timestamp);
+        AppendLog($"[{HistoryStore.FormatTypeLabel(type)}] {target}: {details}");
+        if (!IsDisposed)
+        {
+            UpdateHistoryTabCount();
+            if (_activeTab == ShieldFilterTab.History)
+            {
+                RenderHistoryTable();
+            }
+        }
     }
 
     public void ApplyTheme(ThemePalette palette)
@@ -805,14 +1243,22 @@ public sealed class MainForm : Form
         _brandLogo.Invalidate();
 
         _catalogPage.BackColor = palette.BaseSurface;
+        _historyPage.BackColor = palette.BaseSurface;
         _settingsPage.BackColor = palette.BaseSurface;
         _lblEmptyHint.ForeColor = palette.TextSub;
+        _lblHistoryHint.ForeColor = palette.TextSub;
 
         _txtSearch.SurfaceOverride = palette.BaseSurface;
         _txtSearch.ApplyTheme(palette);
         _txtAddSite.SurfaceOverride = palette.BaseSurface;
         _txtAddSite.ApplyTheme(palette);
         _shieldList.ApplyTheme(palette);
+
+        _segHistoryFilter.SurfaceOverride = palette.BaseSurface;
+        _segHistoryFilter.ApplyTheme(palette);
+        _txtHistorySearch.SurfaceOverride = palette.BaseSurface;
+        _txtHistorySearch.ApplyTheme(palette);
+        _historyTable.ApplyTheme(palette);
 
         _cardProtection.ApplyTheme(palette);
         _cardBehavior.ApplyTheme(palette);
@@ -859,7 +1305,7 @@ public sealed class MainForm : Form
         {
             if (ctrl is MinimalButton btn)
             {
-                btn.SurfaceOverride = btn == _btnCopyLog || btn == _btnClearLog
+                btn.SurfaceOverride = btn == _btnCopyLog || btn == _btnClearLog || btn == _btnCheckUpdate
                     ? cardSurface
                     : palette.BaseSurface;
                 btn.ApplyTheme(palette);
@@ -867,6 +1313,7 @@ public sealed class MainForm : Form
         }
 
         RenderFilteredCatalog();
+        RenderHistoryTable();
 
         if (IsHandleCreated)
         {
@@ -893,7 +1340,17 @@ public sealed class MainForm : Form
         menu.Items.Add(_trayLastSsItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Toggle Shield (Ctrl+Shift+S)", null, (_, _) => ToggleCaptureExclusion());
+
+        var snoozeSub = new ToolStripMenuItem("Snooze Protection");
+        snoozeSub.DropDownItems.Add("15 minutes", null, (_, _) => SnoozeProtection(TimeSpan.FromMinutes(15)));
+        snoozeSub.DropDownItems.Add("30 minutes", null, (_, _) => SnoozeProtection(TimeSpan.FromMinutes(30)));
+        snoozeSub.DropDownItems.Add("1 hour", null, (_, _) => SnoozeProtection(TimeSpan.FromHours(1)));
+        snoozeSub.DropDownItems.Add(new ToolStripSeparator());
+        snoozeSub.DropDownItems.Add("Resume Now", null, (_, _) => ResumeFromSnooze(expired: false));
+        menu.Items.Add(snoozeSub);
+
         menu.Items.Add("Verify Protection Now (Ctrl+Shift+V)", null, async (_, _) => await RunLiveCaptureVerificationAsync());
+        menu.Items.Add($"Check for Updates ({_updateService.CurrentVersion})", null, async (_, _) => await CheckForUpdatesInteractiveAsync());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit ScreenShield", null, (_, _) =>
         {
@@ -1022,8 +1479,14 @@ public sealed class MainForm : Form
         if (keyData == (Keys.Control | Keys.D1)) { SelectTab(ShieldFilterTab.All); return true; }
         if (keyData == (Keys.Control | Keys.D2)) { SelectTab(ShieldFilterTab.Allowed); return true; }
         if (keyData == (Keys.Control | Keys.D3)) { SelectTab(ShieldFilterTab.Blocked); return true; }
-        if (keyData == (Keys.Control | Keys.D4)) { SelectTab(ShieldFilterTab.Settings); return true; }
-        if (keyData == (Keys.Control | Keys.F)) { SelectTab(ShieldFilterTab.All); _txtSearch.FocusInput(); return true; }
+        if (keyData == (Keys.Control | Keys.D4)) { SelectTab(ShieldFilterTab.History); return true; }
+        if (keyData == (Keys.Control | Keys.D5)) { SelectTab(ShieldFilterTab.Settings); return true; }
+        if (keyData == (Keys.Control | Keys.F))
+        {
+            if (_activeTab == ShieldFilterTab.History) _txtHistorySearch.FocusInput();
+            else { SelectTab(ShieldFilterTab.All); _txtSearch.FocusInput(); }
+            return true;
+        }
         if (keyData == Keys.F5) { RefreshCatalogAsync(); TriggerNativeGuardSweepAsync(); return true; }
         if (keyData == (Keys.Control | Keys.Shift | Keys.S)) { ToggleCaptureExclusion(); return true; }
         if (keyData == (Keys.Control | Keys.Shift | Keys.V)) { _ = RunLiveCaptureVerificationAsync(); return true; }
@@ -1067,6 +1530,9 @@ public sealed class MainForm : Form
         _screenshotWatcher.ScreenshotDetected -= OnUpworkScreenshotDetected;
         _screenshotWatcher.Dispose();
         SystemEvents.UserPreferenceChanged -= OnSystemPreferenceChanged;
+        _snoozeTimer.Stop();
+        _snoozeTimer.Dispose();
+        _snoozeMenu.Dispose();
         _guardTimer.Stop();
         _guardTimer.Dispose();
         _affinityWatchdog.Stop();
@@ -1076,6 +1542,10 @@ public sealed class MainForm : Form
         if (_windowInspector is IDisposable disposableInspector)
         {
             disposableInspector.Dispose();
+        }
+        if (_ownsHistoryStore)
+        {
+            _historyStore.Dispose();
         }
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
@@ -1096,6 +1566,12 @@ public sealed class MainForm : Form
             && result.ActualAffinity == Win32Interop.WDA_EXCLUDEFROMCAPTURE;
 
         _helpPopover.SetCaptureExclusion(active);
+
+        if (IsSnoozed)
+        {
+            UpdateSnoozePillText();
+            return result;
+        }
 
         if (active)
         {
@@ -1121,12 +1597,19 @@ public sealed class MainForm : Form
 
     public void ToggleCaptureExclusion()
     {
-        _settings.ExcludeWrapperFromCapture = !_settings.ExcludeWrapperFromCapture;
+        _snoozeUntil = null;
+        _snoozeTimer.Stop();
+        bool prev = _settings.ExcludeWrapperFromCapture;
+        _settings.ExcludeWrapperFromCapture = !prev;
         _suppressSettingsEvents = true;
         _chkExcludeSelf.Checked = _settings.ExcludeWrapperFromCapture;
         _suppressSettingsEvents = false;
         ApplyCaptureExclusionState();
         ScheduleDebouncedSave();
+        RecordHistoryEvent(
+            HistoryEventType.Setting,
+            "Capture Shield",
+            _settings.ExcludeWrapperFromCapture ? "Changed: Paused -> Protected" : "Changed: Protected -> Paused");
     }
 
     public void RefreshCatalogAsync()
@@ -1163,7 +1646,7 @@ public sealed class MainForm : Form
 
     private void EnforceAffinityWatchdog()
     {
-        if (!_settings.ExcludeWrapperFromCapture || !IsHandleCreated) return;
+        if (!_settings.ExcludeWrapperFromCapture || IsSnoozed || !IsHandleCreated) return;
         AffinityResult current = _captureService.ReadAffinity(Handle);
         if (!current.Success || current.ActualAffinity != Win32Interop.WDA_EXCLUDEFROMCAPTURE)
         {
@@ -1204,7 +1687,7 @@ public sealed class MainForm : Form
                 $"Taskbar Auto-Hide Shield: {(_settings.AlwaysHideTaskbarWhenBlockedOpen ? "ENABLED" : "OFF")}\n" +
                 $"Screenshot Check: {capture.Summary}";
 
-            AppendLog($"[Verify] {capture.Summary}");
+            RecordHistoryEvent(HistoryEventType.Verify, "Capture Check", capture.Summary);
             MessageBox.Show(
                 report,
                 fullyVerified ? "ScreenShield — Verified Hidden" : "ScreenShield — Check Result",
@@ -1220,7 +1703,7 @@ public sealed class MainForm : Form
 
     private void TriggerNativeGuardSweepAsync()
     {
-        if (_isDraggingOrResizing || Interlocked.Exchange(ref _guardInFlight, 1) == 1) return;
+        if (_isDraggingOrResizing || IsSnoozed || Interlocked.Exchange(ref _guardInFlight, 1) == 1) return;
 
         AppSettings snap = _settings;
         _ = Task.Run(() =>
@@ -1255,18 +1738,31 @@ public sealed class MainForm : Form
 
         if (eval.UpworkRunning != _lastUpworkRunning)
         {
-            AppendLog(eval.UpworkRunning
-                ? "[Upwork] Upwork Time Tracker detected running."
-                : "[Upwork] Upwork Time Tracker stopped.");
+            RecordHistoryEvent(
+                HistoryEventType.Guard,
+                "Upwork",
+                eval.UpworkRunning ? "Upwork Time Tracker detected running" : "Upwork Time Tracker stopped");
+        }
+
+        if (_taskbarShield.IsTaskbarCurrentlyShielded != _lastTaskbarShielded)
+        {
+            _lastTaskbarShielded = _taskbarShield.IsTaskbarCurrentlyShielded;
+            RecordHistoryEvent(
+                HistoryEventType.Taskbar,
+                "Windows Taskbar",
+                _lastTaskbarShielded ? "Auto-hidden (blocked app/site open)" : "Restored to normal");
         }
 
         _lastUpworkRunning = eval.UpworkRunning;
         _lastExposedCount = eval.ExposedNativeWindows.Count;
+        _lastExposedNames = _lastExposedCount == 0
+            ? string.Empty
+            : string.Join(", ", eval.ExposedNativeWindows.Select(static w => w.ProcessName).Distinct(StringComparer.OrdinalIgnoreCase).Take(3));
         RefreshStatusLine();
 
         foreach (GuardActionItem item in eval.Actions)
         {
-            AppendLog($"[Guard] {item.Reason}");
+            RecordHistoryEvent(HistoryEventType.Guard, item.Window.ProcessName, item.Reason);
             switch (item.EffectiveAction)
             {
                 case NativeGuardAction.AutoMinimize:
@@ -1278,7 +1774,7 @@ public sealed class MainForm : Form
                     break;
                 case NativeGuardAction.PauseUpworkAndAlert:
                     UpworkPauseResult pause = _upworkAutomation.TryPauseUpworkTracker(windows, settings.UpworkProcessNames);
-                    AppendLog($"[Upwork] {pause.Message}");
+                    RecordHistoryEvent(HistoryEventType.Guard, "Upwork", pause.Message);
                     _trayIcon.ShowBalloonTip(3000, "Blocked app/site open", $"{item.Reason}\n{pause.Message}", ToolTipIcon.Warning);
                     break;
                 default:
@@ -1292,6 +1788,16 @@ public sealed class MainForm : Form
     {
         if (_suppressSettingsEvents) return;
 
+        bool prevExclude = _settings.ExcludeWrapperFromCapture;
+        bool prevTaskbar = _settings.AlwaysHideTaskbarWhenBlockedOpen;
+        bool prevGuard = _settings.NativeGuardEnabled;
+        bool prevOnlyUpwork = _settings.OnlyActWhenUpworkRunning;
+        NativeGuardAction prevAction = _settings.NativeGuardAction;
+        int prevCooldown = _settings.GuardCooldownSeconds;
+        bool prevTray = _settings.MinimizeToTrayOnClose;
+        bool prevHotkey = _settings.EnableGlobalHotkey;
+        bool prevStartup = _settings.RunAtWindowsStartup;
+
         _settings.ExcludeWrapperFromCapture = _chkExcludeSelf.Checked;
         _settings.AlwaysHideTaskbarWhenBlockedOpen = _chkTaskbarHide.Checked;
         _settings.NativeGuardEnabled = _chkGuardEnabled.Checked;
@@ -1303,16 +1809,35 @@ public sealed class MainForm : Form
         _settings.GuardCooldownSeconds = _stepCooldown.Value;
         _settings.MinimizeToTrayOnClose = _chkMinimizeToTray.Checked;
         _settings.EnableGlobalHotkey = _chkGlobalHotkey.Checked;
-        bool startupChanged = _settings.RunAtWindowsStartup != _chkRunAtStartup.Checked;
         _settings.RunAtWindowsStartup = _chkRunAtStartup.Checked;
         _settings.Normalize();
 
-        if (startupChanged)
+        if (prevExclude != _settings.ExcludeWrapperFromCapture)
+            RecordHistoryEvent(HistoryEventType.Setting, "Hide ScreenShield", $"{OnOff(prevExclude)} -> {OnOff(_settings.ExcludeWrapperFromCapture)}");
+        if (prevTaskbar != _settings.AlwaysHideTaskbarWhenBlockedOpen)
+            RecordHistoryEvent(HistoryEventType.Setting, "Auto-hide Taskbar", $"{OnOff(prevTaskbar)} -> {OnOff(_settings.AlwaysHideTaskbarWhenBlockedOpen)}");
+        if (prevGuard != _settings.NativeGuardEnabled)
+            RecordHistoryEvent(HistoryEventType.Setting, "Watch Blocked", $"{OnOff(prevGuard)} -> {OnOff(_settings.NativeGuardEnabled)}");
+        if (prevOnlyUpwork != _settings.OnlyActWhenUpworkRunning)
+            RecordHistoryEvent(HistoryEventType.Setting, "Only When Upwork", $"{OnOff(prevOnlyUpwork)} -> {OnOff(_settings.OnlyActWhenUpworkRunning)}");
+        if (prevAction != _settings.NativeGuardAction)
+            RecordHistoryEvent(HistoryEventType.Setting, "Guard Action", $"{prevAction} -> {_settings.NativeGuardAction}");
+        if (prevCooldown != _settings.GuardCooldownSeconds)
+            RecordHistoryEvent(HistoryEventType.Setting, "Cooldown", $"{prevCooldown}s -> {_settings.GuardCooldownSeconds}s");
+        if (prevTray != _settings.MinimizeToTrayOnClose)
+            RecordHistoryEvent(HistoryEventType.Setting, "Minimize to Tray", $"{OnOff(prevTray)} -> {OnOff(_settings.MinimizeToTrayOnClose)}");
+        if (prevHotkey != _settings.EnableGlobalHotkey)
+            RecordHistoryEvent(HistoryEventType.Setting, "Global Hotkey", $"{OnOff(prevHotkey)} -> {OnOff(_settings.EnableGlobalHotkey)}");
+
+        if (prevStartup != _settings.RunAtWindowsStartup)
         {
             bool ok = _startupService.SetEnabled(_settings.RunAtWindowsStartup);
-            AppendLog(_settings.RunAtWindowsStartup
-                ? (ok ? "Enabled automatic start with Windows (tray)." : "Could not register Windows startup entry.")
-                : "Disabled automatic start with Windows.");
+            RecordHistoryEvent(
+                HistoryEventType.Setting,
+                "Windows Startup",
+                _settings.RunAtWindowsStartup
+                    ? (ok ? "Enabled (quiet tray launch)" : "Failed to register startup entry")
+                    : "Disabled");
         }
 
         if (!_settings.AlwaysHideTaskbarWhenBlockedOpen)
@@ -1325,6 +1850,8 @@ public sealed class MainForm : Form
         SyncGlobalHotkey();
         ScheduleDebouncedSave();
     }
+
+    private static string OnOff(bool v) => v ? "On" : "Off";
 
     public void InstantShowFromTray()
     {
@@ -1575,7 +2102,7 @@ public sealed class MainForm : Form
         using var bmp = new Bitmap(32, 32);
         using (Graphics g = Graphics.FromImage(bmp))
         {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             g.Clear(Color.Transparent);
 
             Point[] shield =
